@@ -35,7 +35,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --debug is always on for local runs so output appears in the terminal
+# Only pass --config if a local agent.conf exists; otherwise the agent
+# uses its normal search order (system config, env vars, etc.)
 AGENT_ARGS+=("--debug")
+[[ -f "$CONF" ]] && AGENT_ARGS+=("--config" "$CONF")
 
 # ── Find Python ───────────────────────────────────────────────────────────────
 PYTHON=""
@@ -49,25 +52,12 @@ for cmd in python3 python; do
 done
 [[ -z "$PYTHON" ]] && { echo "Python 3.6+ not found."; exit 1; }
 
-# ── Create local config if missing ───────────────────────────────────────────
-if [[ ! -f "$CONF" ]]; then
-    echo ""
-    echo -e "${CYAN}No local config found – creating $CONF${NC}"
-    echo ""
-
-    while true; do
-        read -rsp "  API Key (sp_live_...): " API_KEY; echo
-        [[ ${#API_KEY} -ge 8 ]] && break
-        warn "API key too short. Try again."
-    done
-
-    cat > "$CONF" <<EOF
-[serverpulse]
-api_url = $DEFAULT_API_URL
-api_key = $API_KEY
-EOF
-    info "Config saved to $CONF"
-    echo ""
+# Info: if no local agent.conf exists the agent uses its system config
+# (/etc/serverpulse/agent.conf) or prompts via ensure_config
+if [[ -f "$CONF" ]]; then
+    info "Using local config: $CONF"
+else
+    info "No local agent.conf found - using system config or prompting on first run"
 fi
 
 # ── Run ───────────────────────────────────────────────────────────────────────

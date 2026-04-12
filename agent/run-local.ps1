@@ -55,33 +55,21 @@ if (-not $PythonExe) {
 
 Write-Info "Using Python at $PythonExe"
 
-# Create local config if missing
-if (-not (Test-Path $ConfPath)) {
-    Write-Host ""
-    Write-Host "No local config found - creating $ConfPath" -ForegroundColor Cyan
-    Write-Host ""
-
-    do {
-        $ApiKeySecure = Read-Host "  API Key (sp_live_...)" -AsSecureString
-        $ApiKeyBSTR   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ApiKeySecure)
-        $ApiKey       = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($ApiKeyBSTR)
-        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ApiKeyBSTR)
-        if ($ApiKey.Length -lt 8) {
-            Write-Warn "API key too short. Try again."
-        }
-    } while ($ApiKey.Length -lt 8)
-
-    $ConfContent = "[serverpulse]`napi_url = $DefaultApiUrl`napi_key = $ApiKey`n"
-    Set-Content -Path $ConfPath -Value $ConfContent -Encoding UTF8
-
-    Write-Info "Config saved to $ConfPath"
-    Write-Host ""
+# Info: if no local agent.conf exists the agent uses its system config
+# (C:\ProgramData\ServerPulse\agent.conf) or prompts via ensure_config
+if (Test-Path $ConfPath) {
+    Write-Info "Using local config: $ConfPath"
+} else {
+    Write-Info "No local agent.conf found - using system config or prompting on first run"
 }
 
 # Build agent argument list
 # --debug is always on for local runs so output appears in the terminal
-$AgentArgs = @("--config", $ConfPath, "--debug")
-if ($DryRun)    { $AgentArgs += "--dry-run" }
+# Only pass --config if a local agent.conf exists; otherwise the agent
+# uses its normal search order (system config, env vars, etc.)
+$AgentArgs = @("--debug")
+if (Test-Path $ConfPath) { $AgentArgs += @("--config", $ConfPath) }
+if ($DryRun) { $AgentArgs += "--dry-run" }
 
 # Single run function
 function Invoke-Agent {
