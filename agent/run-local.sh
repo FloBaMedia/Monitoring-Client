@@ -34,6 +34,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# --debug is always on for local runs so output appears in the terminal
+AGENT_ARGS+=("--debug")
+
 # ── Find Python ───────────────────────────────────────────────────────────────
 PYTHON=""
 for cmd in python3 python; do

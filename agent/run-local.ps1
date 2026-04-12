@@ -79,9 +79,9 @@ if (-not (Test-Path $ConfPath)) {
 }
 
 # Build agent argument list
-$AgentArgs = @("--config", $ConfPath)
+# --debug is always on for local runs so output appears in the terminal
+$AgentArgs = @("--config", $ConfPath, "--debug")
 if ($DryRun)    { $AgentArgs += "--dry-run" }
-if ($DebugMode) { $AgentArgs += "--debug"   }
 
 # Single run function
 function Invoke-Agent {
