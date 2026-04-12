@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # ServerPulse – Local Test Runner (Linux/macOS)
-# Runs the agent once from the current directory without installing anything.
+# Runs the agent from the current directory without installing anything.
 # Config is stored in ./agent.conf (gitignored).
 #
 # Usage:
-#   bash run-local.sh           # real POST to the API
-#   bash run-local.sh --dry-run # print metrics JSON, no HTTP request
-#   bash run-local.sh --debug   # verbose output
+#   bash run-local.sh                    # single run, real POST
+#   bash run-local.sh --dry-run          # single run, print JSON only
+#   bash run-local.sh --watch            # loop every 60s until Ctrl+C
+#   bash run-local.sh --watch --interval 10   # loop every 10s
+#   bash run-local.sh --watch --dry-run  # loop, no HTTP
+#   bash run-local.sh --debug            # verbose output
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +20,19 @@ DEFAULT_API_URL="https://api.yourdomain.com"
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info() { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+WATCH=false
+INTERVAL=60
+AGENT_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --watch)    WATCH=true; shift ;;
+        --interval) INTERVAL="$2"; shift 2 ;;
+        *)          AGENT_ARGS+=("$1"); shift ;;
+    esac
+done
 
 # ── Find Python ───────────────────────────────────────────────────────────────
 PYTHON=""
@@ -51,8 +67,26 @@ EOF
     echo ""
 fi
 
-# ── Run the agent ─────────────────────────────────────────────────────────────
-echo ""
-info "Running agent (no crontab, no system files) ..."
-echo "─────────────────────────────────────────────"
-"$PYTHON" "$AGENT" --config "$CONF" "$@"
+# ── Run ───────────────────────────────────────────────────────────────────────
+run_once() {
+    echo ""
+    echo "─────────────────────────────────────────────"
+    "$PYTHON" "$AGENT" --config "$CONF" "${AGENT_ARGS[@]}"
+}
+
+if [[ "$WATCH" == true ]]; then
+    info "Watch mode – running every ${INTERVAL}s. Press Ctrl+C to stop."
+    trap 'echo ""; info "Stopped."; exit 0' INT TERM
+    RUN=1
+    while true; do
+        echo ""
+        info "Run #${RUN}  $(date '+%Y-%m-%d %H:%M:%S')"
+        run_once || true   # don't exit watch loop on agent error
+        (( RUN++ ))
+        info "Next run in ${INTERVAL}s ..."
+        sleep "$INTERVAL"
+    done
+else
+    info "Running agent (no crontab, no system files) ..."
+    run_once
+fi
