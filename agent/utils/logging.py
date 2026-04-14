@@ -46,4 +46,4 @@ def log_write(level, message, dry_run=False, debug=False):
 def log_debug(message, debug_flag=False):
     """Write a DEBUG line – only when debug mode is active."""
     if debug_flag:
-        log_write("DEBUG", message)
+        log_write("DEBUG", message, debug=True)
