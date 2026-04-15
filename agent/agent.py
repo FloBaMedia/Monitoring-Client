@@ -7,6 +7,7 @@ Usage:
   python agent.py --dry-run                # print collected metrics as JSON, no HTTP
   python agent.py --config /path/to.conf  # override config file path
   python agent.py --apply-template <id>   # fetch and execute a server template
+  python agent.py --no-apply-config       # skip fetching and applying remote config
 """
 
 import platform
@@ -19,10 +20,11 @@ from utils.logging import log_debug, log_write
 
 
 def parse_args():
-    """Minimal arg parsing without argparse. Returns (dry_run, debug, config_path, template_id)."""
+    """Minimal arg parsing without argparse. Returns (dry_run, debug, config_path, template_id, no_apply_config)."""
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
     debug = "--debug" in args
+    no_apply_config = "--no-apply-config" in args
     config_path = None
     template_id = None
     if "--config" in args:
@@ -33,7 +35,7 @@ def parse_args():
         idx = args.index("--apply-template")
         if idx + 1 < len(args):
             template_id = args[idx + 1]
-    return dry_run, debug, config_path, template_id
+    return dry_run, debug, config_path, template_id, no_apply_config
 
 
 def execute_script(script_content, log_debug_fn=None):
@@ -106,7 +108,7 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
 
 
 def main():
-    dry_run, cli_debug, config_override, template_id = parse_args()
+    dry_run, cli_debug, config_override, template_id, no_apply_config = parse_args()
     DEBUG = cli_debug
 
     values, conf_path = load_config(config_override)
@@ -137,6 +139,27 @@ def main():
         )
         sys.exit(0 if ok else 1)
 
+    # ── Fetch and apply remote server configuration ───────────────────────────
+    remote_config = {}
+    if not dry_run and not no_apply_config:
+        from client.api import get_config
+        from services.config_applier import apply_config, run_extra_commands
+
+        log_debug("Fetching remote server config...", debug_flag=DEBUG)
+        config_ok, remote_config = get_config(
+            api_url, api_key, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
+        )
+        if config_ok and remote_config:
+            apply_config(remote_config, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+
+            # ── Auto-update ──────────────────────────────────────────────────
+            if remote_config.get("enableAutoUpdates"):
+                from services.updater import check_and_update
+                check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+        else:
+            log_debug("No remote config received; using local defaults", debug_flag=DEBUG)
+
+    # ── Collect metrics ───────────────────────────────────────────────────────
     is_windows = platform.system() == "Windows"
     if is_windows:
         from services.windows import collect_windows_metrics
@@ -154,6 +177,15 @@ def main():
 
     from client.api import post_metrics
     ok = post_metrics(api_url, api_key, metrics, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+
+    # ── Run extraCommands after successful metrics post ───────────────────────
+    if ok and remote_config:
+        extra_commands = remote_config.get("extraCommands")
+        if extra_commands:
+            from services.config_applier import run_extra_commands
+            log_debug("Running {} extra command(s)".format(len(extra_commands)), debug_flag=DEBUG)
+            run_extra_commands(extra_commands)
+
     sys.exit(0 if ok else 1)
 
 
