@@ -58,6 +58,56 @@ ApplyTemplateResult = {
 }
 
 
+def get_config(api_url, api_key, log_debug_fn=None):
+    """
+    Call GET /api/v1/agent/config to fetch the server configuration.
+    Returns (success, config_dict) where config_dict contains timezone, reportIntervalSeconds,
+    enableAutoUpdates, customNtp, customDns, locale, extraCommands.
+    """
+    url = "{}/api/v1/agent/config".format(api_url)
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("X-Server-Key", api_key)
+    req.add_header("User-Agent", "ServerPulse-Agent/{}".format(AGENT_VERSION))
+
+    if log_debug_fn:
+        log_debug_fn("GET {}".format(url))
+
+    ctx = ssl.create_default_context()
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+            elapsed = time.time() - t0
+            response_body = resp.read().decode("utf-8", errors="replace")
+            from utils.logging import log_write
+            log_write(
+                "INFO",
+                "GET /api/v1/agent/config → {} ({:.2f}s)".format(resp.status, elapsed),
+            )
+            try:
+                data = json.loads(response_body)
+                return True, data.get("data", {})
+            except json.JSONDecodeError:
+                log_write("ERROR", "Failed to parse JSON response from get_config")
+                return True, {}
+    except urllib.error.HTTPError as e:
+        elapsed = time.time() - t0
+        try:
+            body_text = e.read().decode("utf-8", errors="replace")[:2000]
+        except Exception:
+            body_text = "(unreadable)"
+        from utils.logging import log_write
+        log_write(
+            "ERROR",
+            "GET /api/v1/agent/config → {} ({:.2f}s): {}".format(e.code, elapsed, body_text),
+        )
+        return False, {}
+    except Exception as e:
+        from utils.logging import log_write
+        log_write("ERROR", "GET /api/v1/agent/config failed: {}".format(e))
+        return False, {}
+
+
 def apply_template(api_url, api_key, template_id, server_id, log_debug_fn=None):
     """
     Call POST /api/v1/templates/:id/apply/:serverId to apply a template.
