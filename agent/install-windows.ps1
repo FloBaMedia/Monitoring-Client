@@ -15,7 +15,7 @@ $InstallDir  = "C:\ProgramData\ServerPulse"
 $AgentPath   = "$InstallDir\agent.py"
 $ConfPath    = "$InstallDir\agent.conf"
 $LogPath     = "$InstallDir\agent.log"
-$GithubRaw   = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-API/main/agent/agent.py"
+$GithubRaw   = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/agent.py"
 $TaskName    = "ServerPulseAgent"
 
 function Write-Info  { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Green }

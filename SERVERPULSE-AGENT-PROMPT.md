@@ -156,7 +156,7 @@ OnUnitActiveSec=30s
 
 ### One-Liner Installation:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-API/main/agent/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh | bash
 ```
 
 Oder manuell:
@@ -164,7 +164,7 @@ Oder manuell:
 # 1. Agent herunterladen
 sudo mkdir -p /etc/serverpulse
 sudo curl -o /etc/serverpulse/agent.py \
-  https://raw.githubusercontent.com/FloBaMedia/Monitoring-API/main/agent/agent.py
+  https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/agent.py
 
 # 2. Konfig anlegen
 sudo tee /etc/serverpulse/agent.conf <<EOF

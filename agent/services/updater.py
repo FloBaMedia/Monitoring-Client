@@ -17,7 +17,7 @@ from models.constants import AGENT_VERSION
 from utils.logging import log_write
 
 GITHUB_RAW_URL = (
-    "https://raw.githubusercontent.com/FloBaMedia/Monitoring-API/main/agent/agent.py"
+    "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/agent.py"
 )
 
 # Where the installers place agent.py

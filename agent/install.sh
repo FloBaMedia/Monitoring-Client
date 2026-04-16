@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ServerPulse Agent Installer for Linux
-# Usage: curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-API/main/agent/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh | bash
 set -euo pipefail
 
-GITHUB_RAW="https://raw.githubusercontent.com/FloBaMedia/Monitoring-API/main/agent/agent.py"
+GITHUB_RAW="https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/agent.py"
 INSTALL_DIR="/etc/serverpulse"
 AGENT_PATH="$INSTALL_DIR/agent.py"
 CONF_PATH="$INSTALL_DIR/agent.conf"
