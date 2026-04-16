@@ -5,9 +5,22 @@
 .DESCRIPTION
     Downloads the agent.py, creates the config, and registers a Scheduled Task
     to run the agent every minute.
+    API URL and API Key can be passed as parameters or environment variables
+    (SERVERPULSE_URL / SERVERPULSE_KEY) to run non-interactively.
 .EXAMPLE
+    # Interactive
     powershell -ExecutionPolicy Bypass -File install-windows.ps1
+
+    # Non-interactive (e.g. from a setup command)
+    powershell -ExecutionPolicy Bypass -File install-windows.ps1 -ApiUrl "https://api.example.com" -ApiKey "sp_live_..."
+
+    # Via environment variables
+    $env:SERVERPULSE_URL="https://api.example.com"; $env:SERVERPULSE_KEY="sp_live_..."; powershell -ExecutionPolicy Bypass -File install-windows.ps1
 #>
+param(
+    [string]$ApiUrl = $env:SERVERPULSE_URL,
+    [string]$ApiKey = $env:SERVERPULSE_KEY
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -63,27 +76,41 @@ try {
     exit 1
 }
 
-# ── 4. Interactive config ──────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "Please enter your ServerPulse configuration:" -ForegroundColor White
+# ── 4. Config (params / env vars or interactive) ──────────────────────────────
+$ApiUrl = $ApiUrl.TrimEnd("/")
 
-do {
-    $ApiUrl = Read-Host "  API URL (e.g. https://api.yourdomain.com)"
-    $ApiUrl = $ApiUrl.TrimEnd("/")
-    if (-not ($ApiUrl -match "^https?://")) {
-        Write-Warn "URL must start with http:// or https://"
-    }
-} while (-not ($ApiUrl -match "^https?://"))
+if ($ApiUrl -and $ApiKey) {
+    Write-Info "Using API URL and API Key from parameters / environment variables."
+} else {
+    Write-Host ""
+    Write-Host "Please enter your ServerPulse configuration:" -ForegroundColor White
 
-do {
-    $ApiKeySecure = Read-Host "  API Key (sp_live_...)" -AsSecureString
-    $ApiKeyBSTR   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ApiKeySecure)
-    $ApiKey       = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($ApiKeyBSTR)
-    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ApiKeyBSTR)
-    if ($ApiKey.Length -lt 8) {
-        Write-Warn "API key seems too short. Please try again."
+    if (-not $ApiUrl) {
+        do {
+            $ApiUrl = Read-Host "  API URL (e.g. https://api.yourdomain.com)"
+            $ApiUrl = $ApiUrl.TrimEnd("/")
+            if (-not ($ApiUrl -match "^https?://")) {
+                Write-Warn "URL must start with http:// or https://"
+            }
+        } while (-not ($ApiUrl -match "^https?://"))
+    } else {
+        Write-Info "Using API URL from parameter: $ApiUrl"
     }
-} while ($ApiKey.Length -lt 8)
+
+    if (-not $ApiKey) {
+        do {
+            $ApiKeySecure = Read-Host "  API Key (sp_live_...)" -AsSecureString
+            $ApiKeyBSTR   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ApiKeySecure)
+            $ApiKey       = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($ApiKeyBSTR)
+            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ApiKeyBSTR)
+            if ($ApiKey.Length -lt 8) {
+                Write-Warn "API key seems too short. Please try again."
+            }
+        } while ($ApiKey.Length -lt 8)
+    } else {
+        Write-Info "Using API Key from parameter."
+    }
+}
 
 # ── 5. Write config ───────────────────────────────────────────────────────────
 $ConfContent = @"

@@ -62,27 +62,47 @@ fi
 chmod 755 "$AGENT_PATH"
 info "Agent installed at $AGENT_PATH"
 
-# ── 5. Interactive config ──────────────────────────────────────────────────────
-echo ""
-echo "Please enter your ServerPulse configuration:"
+# ── 5. Config (env vars or interactive) ───────────────────────────────────────
+# Accept API_URL / API_KEY from environment so the installer can run non-interactively:
+#   curl -sSL <url> | SERVERPULSE_URL=https://... SERVERPULSE_KEY=sp_live_... bash
+API_URL="${SERVERPULSE_URL:-}"
+API_KEY="${SERVERPULSE_KEY:-}"
 
-while true; do
-    read -rp "  API URL (e.g. https://api.yourdomain.com): " API_URL
-    API_URL="${API_URL%/}"  # strip trailing slash
-    if [[ "$API_URL" =~ ^https?:// ]]; then
-        break
-    fi
-    warn "URL must start with http:// or https://"
-done
+# Strip trailing slash if provided via env
+API_URL="${API_URL%/}"
 
-while true; do
-    read -rsp "  API Key (sp_live_...): " API_KEY
-    echo
-    if [[ ${#API_KEY} -ge 8 ]]; then
-        break
+if [[ -n "$API_URL" && -n "$API_KEY" ]]; then
+    info "Using API URL and API Key from environment variables."
+else
+    echo ""
+    echo "Please enter your ServerPulse configuration:"
+
+    if [[ -z "$API_URL" ]]; then
+        while true; do
+            read -rp "  API URL (e.g. https://api.yourdomain.com): " API_URL
+            API_URL="${API_URL%/}"
+            if [[ "$API_URL" =~ ^https?:// ]]; then
+                break
+            fi
+            warn "URL must start with http:// or https://"
+        done
+    else
+        info "Using API URL from environment: $API_URL"
     fi
-    warn "API key seems too short. Please try again."
-done
+
+    if [[ -z "$API_KEY" ]]; then
+        while true; do
+            read -rsp "  API Key (sp_live_...): " API_KEY
+            echo
+            if [[ ${#API_KEY} -ge 8 ]]; then
+                break
+            fi
+            warn "API key seems too short. Please try again."
+        done
+    else
+        info "Using API Key from environment."
+    fi
+fi
 
 # ── 6. Write config ───────────────────────────────────────────────────────────
 cat > "$CONF_PATH" <<EOF
