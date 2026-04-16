@@ -83,6 +83,26 @@ def _win_cpu():
     return pct, cores
 
 
+def _win_cpu_info():
+    """Returns (cpu_model, cpu_mhz, cpu_threads) via WMIC."""
+    model = None
+    mhz = None
+    threads = None
+    rows = _wmic("cpu get Name,MaxClockSpeed,NumberOfLogicalProcessors")
+    if rows:
+        try:
+            model = rows[0].get("Name") or None
+            mhz_val = rows[0].get("MaxClockSpeed")
+            if mhz_val:
+                mhz = int(mhz_val)
+            threads_val = rows[0].get("NumberOfLogicalProcessors")
+            if threads_val:
+                threads = int(threads_val)
+        except (ValueError, TypeError):
+            pass
+    return model, mhz, threads
+
+
 def _win_memory():
     """Returns (total_mb, used_mb, usage_pct, swap_total_mb, swap_used_mb)."""
     rows = _wmic("OS get TotalVisibleMemorySize,FreePhysicalMemory,TotalVirtualMemorySize,FreeVirtualMemory")
@@ -206,6 +226,7 @@ def collect_windows_metrics():
     from models.constants import AGENT_VERSION
 
     cpu_pct, cpu_cores = _win_cpu()
+    cpu_model, cpu_mhz, cpu_threads = _win_cpu_info()
     mem_total, mem_used, mem_pct, swap_total, swap_used = _win_memory()
     disks = _win_disk()
     networks = _win_network()
@@ -217,6 +238,9 @@ def collect_windows_metrics():
         "kernelVersion": platform.release(),
         "uptimeSeconds": uptime,
         "agentVersion": AGENT_VERSION,
+        "cpuModel": cpu_model,
+        "cpuMhz": cpu_mhz,
+        "cpuThreads": cpu_threads,
         "cpuUsagePercent": cpu_pct,
         "cpuCores": cpu_cores,
         "loadAvg1": 0.0,

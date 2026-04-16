@@ -111,6 +111,29 @@ def _read_cpu_cores():
         return 0
 
 
+def _read_cpu_info():
+    """Returns (cpu_model, cpu_mhz, cpu_threads) from /proc/cpuinfo."""
+    model = None
+    mhz = None
+    threads = 0
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            for line in f:
+                if line.startswith("processor"):
+                    threads += 1
+                elif model is None and line.startswith("model name"):
+                    model = line.split(":", 1)[1].strip()
+                elif mhz is None and line.startswith("cpu MHz"):
+                    try:
+                        mhz = int(float(line.split(":", 1)[1].strip()))
+                    except ValueError:
+                        pass
+    except Exception as e:
+        from utils.logging import log_write
+        log_write("WARNING", "cpu_info unavailable: {}".format(e))
+    return model, mhz, max(threads, 1)
+
+
 def _read_load_avg():
     try:
         with open("/proc/loadavg", "r") as f:
@@ -272,6 +295,7 @@ def collect_linux_metrics():
 
     cpu_pct, io_read, io_write = _sample_proc_delta()
     cpu_cores = _read_cpu_cores()
+    cpu_model, cpu_mhz, cpu_threads = _read_cpu_info()
     load1, load5, load15 = _read_load_avg()
     mem_total, mem_used, mem_pct, swap_total, swap_used = _read_memory()
     disks = _read_disk_usages()
@@ -287,6 +311,9 @@ def collect_linux_metrics():
         "kernelVersion": kernel,
         "uptimeSeconds": uptime,
         "agentVersion": AGENT_VERSION,
+        "cpuModel": cpu_model,
+        "cpuMhz": cpu_mhz,
+        "cpuThreads": cpu_threads,
         "cpuUsagePercent": cpu_pct,
         "cpuCores": cpu_cores,
         "loadAvg1": load1,
