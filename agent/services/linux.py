@@ -249,6 +249,78 @@ def _read_network_interfaces():
     return result
 
 
+def _read_top_processes(limit=10):
+    """Return top `limit` processes sorted by CPU % using two /proc snapshots."""
+    try:
+        def _read_proc_stats():
+            stats = {}
+            for pid in os.listdir("/proc"):
+                if not pid.isdigit():
+                    continue
+                try:
+                    with open("/proc/{}/stat".format(pid), "r") as f:
+                        parts = f.read().split()
+                    name = parts[1].strip("()")
+                    utime = int(parts[13])
+                    stime = int(parts[14])
+                    stats[pid] = {"name": name, "ticks": utime + stime}
+                except Exception:
+                    pass
+            return stats
+
+        snap0 = _read_proc_stats()
+        time.sleep(0.2)
+        snap1 = _read_proc_stats()
+
+        mem_total = 0
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        mem_total = int(line.split()[1]) * 1024
+                        break
+        except Exception:
+            pass
+
+        hz = 100  # typical Linux USER_HZ
+        results = []
+        for pid, s1 in snap1.items():
+            if pid not in snap0:
+                continue
+            delta = s1["ticks"] - snap0[pid]["ticks"]
+            cpu_pct = round((delta / hz) / 0.2 * 100.0, 1)
+            mem_mb = 0.0
+            user = ""
+            try:
+                with open("/proc/{}/status".format(pid), "r") as f:
+                    for line in f:
+                        if line.startswith("VmRSS:"):
+                            mem_mb = round(int(line.split()[1]) / 1024.0, 1)
+                        elif line.startswith("Uid:"):
+                            uid = line.split()[1]
+                            try:
+                                import pwd
+                                user = pwd.getpwuid(int(uid)).pw_name
+                            except Exception:
+                                user = uid
+            except Exception:
+                pass
+            results.append({
+                "pid": int(pid),
+                "name": s1["name"],
+                "cpuPercent": cpu_pct,
+                "memMb": mem_mb,
+                "user": user,
+            })
+
+        results.sort(key=lambda p: p["cpuPercent"], reverse=True)
+        return results[:limit]
+    except Exception as e:
+        from utils.logging import log_write
+        log_write("WARNING", "top_processes unavailable: {}".format(e))
+        return []
+
+
 def _read_process_count():
     try:
         return sum(1 for d in os.listdir("/proc") if d.isdigit())
@@ -301,6 +373,7 @@ def collect_linux_metrics():
     disks = _read_disk_usages()
     networks = _read_network_interfaces()
     proc_count = _read_process_count()
+    top_processes = _read_top_processes()
     open_files = _read_open_files()
     os_info = _read_os_info()
     uptime = _read_uptime()
@@ -327,6 +400,7 @@ def collect_linux_metrics():
         "diskUsages": disks,
         "networkInterfaces": networks,
         "processCount": proc_count,
+        "topProcesses": top_processes,
         "openFiles": open_files,
         "ioReadKbps": io_read,
         "ioWriteKbps": io_write,

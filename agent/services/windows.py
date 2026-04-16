@@ -204,6 +204,36 @@ def _win_processes():
         return 0
 
 
+def _win_top_processes(limit=10):
+    """Return top processes by CPU using WMIC (best-effort; WorkingSetSize for memory)."""
+    try:
+        rows = _wmic(
+            "process get processid,name,PercentProcessorTime,WorkingSetSize,ExecutablePath"
+        )
+        results = []
+        for row in rows:
+            try:
+                pid = int(row.get("ProcessId") or row.get("processid") or 0)
+                name = (row.get("Name") or row.get("name") or "").strip()
+                cpu = float(row.get("PercentProcessorTime") or 0)
+                mem_bytes = int(row.get("WorkingSetSize") or 0)
+                mem_mb = round(mem_bytes / (1024 * 1024), 1)
+                if not name:
+                    continue
+                results.append({
+                    "pid": pid,
+                    "name": name,
+                    "cpuPercent": round(cpu, 1),
+                    "memMb": mem_mb,
+                })
+            except (ValueError, TypeError):
+                continue
+        results.sort(key=lambda p: p["cpuPercent"], reverse=True)
+        return results[:limit]
+    except Exception:
+        return []
+
+
 def _win_uptime():
     """Returns uptime in seconds."""
     from utils.logging import log_write
@@ -227,6 +257,7 @@ def collect_windows_metrics():
 
     cpu_pct, cpu_cores = _win_cpu()
     cpu_model, cpu_mhz, cpu_threads = _win_cpu_info()
+    top_processes = _win_top_processes()
     mem_total, mem_used, mem_pct, swap_total, swap_used = _win_memory()
     disks = _win_disk()
     networks = _win_network()
@@ -254,6 +285,7 @@ def collect_windows_metrics():
         "diskUsages": disks,
         "networkInterfaces": networks,
         "processCount": proc_count,
+        "topProcesses": top_processes,
         "openFiles": 0,
         "ioReadKbps": 0.0,
         "ioWriteKbps": 0.0,
