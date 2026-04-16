@@ -6,7 +6,7 @@ import os
 import platform
 import sys
 
-DEFAULT_API_URL = "https://api.yourdomain.com"
+from models.constants import DEFAULT_API_URL
 
 REQUIRED_FIELDS = [
     ("api_url", "API URL",              DEFAULT_API_URL, False),

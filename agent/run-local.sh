@@ -64,7 +64,7 @@ fi
 run_once() {
     echo ""
     echo "─────────────────────────────────────────────"
-    "$PYTHON" "$AGENT" --config "$CONF" "${AGENT_ARGS[@]}"
+    "$PYTHON" "$AGENT" "${AGENT_ARGS[@]}"
 }
 
 if [[ "$WATCH" == true ]]; then

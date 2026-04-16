@@ -1,5 +1,25 @@
-.idea
-__pycache__/
-*.pyc
+# IDE
+.idea/
+.vscode/
+*.iml
 
-agent/agent.conf
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Config files (contain secrets)
+*.conf
+.env
+.env.*
+
+# Logs & runtime artifacts
+*.log
+*.log.*
+*.bak
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db

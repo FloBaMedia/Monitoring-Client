@@ -14,16 +14,13 @@ def _get_log_path():
     return "/var/log/serverpulse-agent.log"
 
 
-def log_write(level, message, dry_run=False, debug=False):
-    """Write a log line. In dry-run or debug mode also writes to stderr."""
+def log_write(level, message, debug=False):
+    """Write a log line to the log file. Also writes to stderr in debug mode."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     line = "[{}] {:<7} {}\n".format(ts, level, message)
 
-    if dry_run or debug:
+    if debug:
         sys.stderr.write(line)
-
-    if dry_run:
-        return
 
     log_path = _get_log_path()
     try:

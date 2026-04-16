@@ -17,11 +17,13 @@ def _run(cmd, timeout=30):
     try:
         result = subprocess.run(
             cmd,
-            capture_output=True,
-            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             timeout=timeout,
         )
-        return result.returncode == 0, result.stdout.strip(), result.stderr.strip()
+        stdout = result.stdout.decode("utf-8", errors="replace").strip()
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        return result.returncode == 0, stdout, stderr
     except subprocess.TimeoutExpired:
         return False, "", "timeout after {}s".format(timeout)
     except Exception as e:
@@ -139,6 +141,9 @@ def apply_dns(custom_dns):
         ok, _, err = _run(["powershell", "-Command", ps_cmd])
     else:
         try:
+            # Note: systems using systemd-resolved or NetworkManager may
+            # regenerate /etc/resolv.conf on the next network event, overwriting
+            # these changes. For persistent DNS, configure via those services instead.
             lines = ["# Managed by ServerPulse Agent\n"]
             for dns in custom_dns:
                 lines.append("nameserver {}\n".format(dns))

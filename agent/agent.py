@@ -59,11 +59,13 @@ def execute_script(script_content, log_debug_fn=None):
     try:
         result = subprocess.run(
             cmd,
-            capture_output=True,
-            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             timeout=300,
             shell=shell,
         )
+        result.stdout = result.stdout.decode("utf-8", errors="replace")
+        result.stderr = result.stderr.decode("utf-8", errors="replace")
         if result.stdout:
             for line in result.stdout.splitlines():
                 log_write("INFO", "[script] {}".format(line))

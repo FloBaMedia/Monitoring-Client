@@ -50,14 +50,6 @@ def post_metrics(api_url, api_key, payload, log_debug_fn=None):
         return False
 
 
-ApplyTemplateResult = {
-    "alertRulesCreated": int,
-    "configUpdated": bool,
-    "serverUpdated": bool,
-    "scriptContent": str | None,
-}
-
-
 def get_config(api_url, api_key, log_debug_fn=None):
     """
     Call GET /api/v1/agent/config to fetch the server configuration.
