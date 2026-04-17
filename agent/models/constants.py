@@ -1,6 +1,6 @@
 AGENT_VERSION = "1.0.0"
 LOG_MAX_BYTES = 1_048_576  # 1 MB
-DEFAULT_API_URL = "https://api.yourdomain.com"
+DEFAULT_API_URL = "https://sp-api.floba-media.de"
 
 SKIP_FILESYSTEMS = {
     "tmpfs", "devtmpfs", "sysfs", "proc", "cgroup", "cgroup2",
