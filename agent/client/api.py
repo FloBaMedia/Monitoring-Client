@@ -57,13 +57,20 @@ def post_metrics(api_url, api_key, payload, log_debug_fn=None):
             return True
     except urllib.error.HTTPError as e:
         elapsed = time.time() - t0
+        detail = "(unreadable)"
         try:
-            body_text = e.read().decode("utf-8", errors="replace")[:2000]
+            raw = e.read().decode("utf-8", errors="replace")[:2000]
+            detail = raw
+            err_info = json.loads(raw).get("error", {})
+            detail = "{} — {}".format(
+                err_info.get("code", "ERROR"),
+                err_info.get("message", raw),
+            )
         except Exception:
-            body_text = "(unreadable)"
+            pass
         log_write(
             "ERROR",
-            "POST /api/v1/agent/metrics → {} ({:.2f}s, {}B): {}".format(e.code, elapsed, len(body), body_text),
+            "POST /api/v1/agent/metrics → {} ({:.2f}s, {}B): {}".format(e.code, elapsed, len(body), detail),
         )
         return False
     except Exception as e:
