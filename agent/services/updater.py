@@ -9,7 +9,7 @@ import platform
 import re
 import shutil
 import ssl
-import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -19,6 +19,16 @@ from utils.logging import log_write
 GITHUB_BASE_URL = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
 
 GITHUB_RAW_URL = GITHUB_BASE_URL + "/agent.py"
+
+# Check at most once per hour to avoid hammering GitHub and staggering updates
+# naturally (each server has its own cron offset).
+UPDATE_CHECK_INTERVAL = 3600  # seconds
+
+_STATE_PATHS = {
+    "Linux": "/etc/serverpulse/.update_check_ts",
+    "Darwin": "/etc/serverpulse/.update_check_ts",
+    "Windows": r"C:\ProgramData\ServerPulse\.update_check_ts",
+}
 
 # Module files updated alongside agent.py
 MODULE_FILES = [
@@ -83,10 +93,36 @@ def _fetch(url, timeout=15):
         return False, ""
 
 
+def _state_path():
+    install_dir = os.path.dirname(_installed_path())
+    default = os.path.join(install_dir, ".update_check_ts")
+    return _STATE_PATHS.get(platform.system(), default)
+
+
+def _read_last_check_ts():
+    try:
+        with open(_state_path(), "r") as f:
+            return float(f.read().strip())
+    except Exception:
+        return 0.0
+
+
+def _write_last_check_ts():
+    try:
+        with open(_state_path(), "w") as f:
+            f.write(str(time.time()))
+    except Exception as e:
+        log_write("WARNING", "Auto-update: could not write state file: {}".format(e))
+
+
 def check_and_update(log_debug_fn=None):
     """
     Check GitHub for a newer agent version. If found and enableAutoUpdates is True,
     download the new agent.py, back up the old one, and replace it in-place.
+
+    Rate-limited to once per UPDATE_CHECK_INTERVAL seconds so the cron job
+    running every minute doesn't hammer GitHub. Natural staggering comes from
+    each server having its own install-time offset.
 
     The new version takes effect on the next scheduled run (no restart needed for
     one-shot / cron-based agents).
@@ -94,8 +130,20 @@ def check_and_update(log_debug_fn=None):
     Returns:
         'updated'    – new version was downloaded and installed
         'up_to_date' – already running the latest version
-        'skipped'    – update check failed (network error, parse error, etc.)
+        'skipped'    – throttled, network error, or parse error
     """
+    elapsed = time.time() - _read_last_check_ts()
+    if elapsed < UPDATE_CHECK_INTERVAL:
+        if log_debug_fn:
+            log_debug_fn(
+                "Auto-update: skipping check ({:.0f}s / {}s since last check)".format(
+                    elapsed, UPDATE_CHECK_INTERVAL
+                )
+            )
+        return "skipped"
+
+    _write_last_check_ts()
+
     if log_debug_fn:
         log_debug_fn("Auto-update: checking {} for latest version".format(GITHUB_RAW_URL))
 
