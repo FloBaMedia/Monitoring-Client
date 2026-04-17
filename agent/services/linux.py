@@ -79,21 +79,21 @@ def _calc_io_delta(snap0, snap1, elapsed):
     return read_kbps, write_kbps
 
 
-def _sample_proc_delta(interval=0.1):
+def _take_proc_snapshot():
+    """Read CPU and disk snapshots together with a timestamp."""
+    return _parse_proc_stat(), _parse_proc_diskstats(), time.time()
+
+
+def _calc_deltas(snap0, snap1):
     """
-    Single 100ms sleep to capture CPU + IO deltas.
+    Compute CPU % and IO kbps from two snapshots returned by _take_proc_snapshot().
     Returns (cpu_percent, io_read_kbps, io_write_kbps).
     """
-    snap0_cpu = _parse_proc_stat()
-    snap0_disk = _parse_proc_diskstats()
-    t0 = time.time()
-    time.sleep(interval)
-    snap1_cpu = _parse_proc_stat()
-    snap1_disk = _parse_proc_diskstats()
-    elapsed = time.time() - t0
-
-    cpu_pct = _calc_cpu_delta(snap0_cpu, snap1_cpu)
-    io_read, io_write = _calc_io_delta(snap0_disk, snap1_disk, elapsed)
+    cpu0, disk0, t0 = snap0
+    cpu1, disk1, t1 = snap1
+    elapsed = t1 - t0
+    cpu_pct = _calc_cpu_delta(cpu0, cpu1)
+    io_read, io_write = _calc_io_delta(disk0, disk1, elapsed)
     return cpu_pct, io_read, io_write
 
 
@@ -379,11 +379,18 @@ def _read_uptime():
 
 
 def collect_linux_metrics():
-    """Collect all metrics on Linux. Includes a single 100ms sleep for CPU/IO delta."""
+    """Collect all metrics on Linux.
+
+    CPU and IO deltas are measured across the _read_top_processes() call
+    (~200 ms internal sleep) plus surrounding reads, giving roughly a 1-second
+    window without any extra sleep.  This provides ~1% CPU resolution at the
+    standard 100 Hz Linux tick rate.
+    """
     from models.constants import AGENT_VERSION
 
-    cpu_pct, io_read, io_write = _sample_proc_delta()
-    cpu_pct = max(0.0, min(100.0, cpu_pct))
+    # Snapshot 0 — before the blocking work
+    snap0 = _take_proc_snapshot()
+
     cpu_cores = _read_cpu_cores()
     cpu_model, cpu_mhz, cpu_threads = _read_cpu_info()
     load1, load5, load15 = _read_load_avg()
@@ -391,11 +398,16 @@ def collect_linux_metrics():
     disks = _read_disk_usages()
     networks = _read_network_interfaces()
     proc_count = _read_process_count()
-    top_processes = _read_top_processes()
+    top_processes = _read_top_processes()  # contains a ~200ms sleep
     open_files = _read_open_files()
     os_info = _read_os_info()
     uptime = _read_uptime()
     kernel = platform.release()
+
+    # Snapshot 1 — after; window is typically 800ms–1.5s depending on disk count
+    snap1 = _take_proc_snapshot()
+    cpu_pct, io_read, io_write = _calc_deltas(snap0, snap1)
+    cpu_pct = max(0.0, min(100.0, cpu_pct))
 
     return {
         "os": os_info,
