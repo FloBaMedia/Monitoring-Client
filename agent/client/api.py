@@ -1,6 +1,7 @@
 """HTTP client for ServerPulse Agent API communication."""
 
 import json
+import math
 import ssl
 import time
 import urllib.error
@@ -8,10 +9,33 @@ import urllib.request
 from models.constants import AGENT_VERSION
 
 
+def _sanitize(obj):
+    """Recursively replace non-finite floats (NaN, Infinity) with 0.0.
+
+    Python's json.dumps emits bare NaN / Infinity tokens for non-finite floats,
+    which are not valid JSON and cause JavaScript's JSON.parse to throw.
+    """
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return 0.0
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
 def post_metrics(api_url, api_key, payload, log_debug_fn=None):
     """POST the metrics payload to the API. Returns True on success."""
+    from utils.logging import log_write
+
     url = "{}/api/v1/agent/metrics".format(api_url)
-    body = json.dumps(payload).encode("utf-8")
+    try:
+        body = json.dumps(_sanitize(payload), allow_nan=False).encode("utf-8")
+    except (ValueError, TypeError) as e:
+        log_write("ERROR", "post_metrics: failed to serialize payload: {}".format(e))
+        return False
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("X-Server-Key", api_key)
@@ -19,14 +43,13 @@ def post_metrics(api_url, api_key, payload, log_debug_fn=None):
 
     if log_debug_fn:
         log_debug_fn("POST {} ({} bytes)".format(url, len(body)))
-        log_debug_fn("Payload: {}".format(json.dumps(payload, indent=2)))
+        log_debug_fn("Payload: {}".format(json.dumps(_sanitize(payload), indent=2)))
 
     ctx = ssl.create_default_context()
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             elapsed = time.time() - t0
-            from utils.logging import log_write
             log_write(
                 "INFO",
                 "POST /api/v1/agent/metrics → {} ({:.2f}s)".format(resp.status, elapsed),
@@ -38,14 +61,12 @@ def post_metrics(api_url, api_key, payload, log_debug_fn=None):
             body_text = e.read().decode("utf-8", errors="replace")[:2000]
         except Exception:
             body_text = "(unreadable)"
-        from utils.logging import log_write
         log_write(
             "ERROR",
             "POST /api/v1/agent/metrics → {} ({:.2f}s): {}".format(e.code, elapsed, body_text),
         )
         return False
     except Exception as e:
-        from utils.logging import log_write
         log_write("ERROR", "POST /api/v1/agent/metrics failed: {}".format(e))
         return False
 

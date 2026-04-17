@@ -126,7 +126,7 @@ def _read_cpu_info():
                 elif mhz is None and line.startswith("cpu MHz"):
                     try:
                         mhz = int(float(line.split(":", 1)[1].strip()))
-                    except ValueError:
+                    except (ValueError, OverflowError):
                         pass
     except Exception as e:
         from utils.logging import log_write
@@ -366,6 +366,7 @@ def collect_linux_metrics():
     from models.constants import AGENT_VERSION
 
     cpu_pct, io_read, io_write = _sample_proc_delta()
+    cpu_pct = max(0.0, min(100.0, cpu_pct))
     cpu_cores = _read_cpu_cores()
     cpu_model, cpu_mhz, cpu_threads = _read_cpu_info()
     load1, load5, load15 = _read_load_avg()
