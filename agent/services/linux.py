@@ -1,9 +1,16 @@
 """Linux metric collectors for ServerPulse Agent."""
 
+import json
 import os
 import platform
 import time
 from models.constants import SKIP_FILESYSTEMS, DISK_PREFIXES
+
+# Persists the previous CPU snapshot so the next run can calculate a ~1-minute average.
+_CPU_SNAP_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ".cpu_snap",
+)
 
 
 def _parse_proc_stat():
@@ -95,6 +102,26 @@ def _calc_deltas(snap0, snap1):
     cpu_pct = _calc_cpu_delta(cpu0, cpu1)
     io_read, io_write = _calc_io_delta(disk0, disk1, elapsed)
     return cpu_pct, io_read, io_write
+
+
+def _load_cpu_snap():
+    """Load the persisted CPU snapshot from the previous run. Returns (fields, ts) or None."""
+    try:
+        with open(_CPU_SNAP_FILE, "r") as f:
+            data = json.load(f)
+        return data["fields"], data["ts"]
+    except Exception:
+        return None
+
+
+def _save_cpu_snap(fields, ts):
+    """Persist a CPU snapshot for use by the next run."""
+    try:
+        with open(_CPU_SNAP_FILE, "w") as f:
+            json.dump({"fields": fields, "ts": ts}, f)
+    except Exception as e:
+        from utils.logging import log_write
+        log_write("WARNING", "cpu_snap: could not write state file: {}".format(e))
 
 
 def _read_cpu_cores():
@@ -391,6 +418,16 @@ def collect_linux_metrics():
     # Snapshot 0 — before the blocking work
     snap0 = _take_proc_snapshot()
 
+    # Calculate 1-minute CPU average using the snapshot saved by the previous run.
+    prev_snap = _load_cpu_snap()
+    if prev_snap is not None:
+        prev_fields, prev_ts = prev_snap
+        cpu_avg_1min = _calc_cpu_delta(prev_fields, snap0[0])
+        cpu_avg_1min = round(max(0.0, min(100.0, cpu_avg_1min)), 2)
+    else:
+        cpu_avg_1min = None
+    _save_cpu_snap(snap0[0], snap0[2])
+
     cpu_cores = _read_cpu_cores()
     cpu_model, cpu_mhz, cpu_threads = _read_cpu_info()
     load1, load5, load15 = _read_load_avg()
@@ -418,6 +455,7 @@ def collect_linux_metrics():
         "cpuMhz": cpu_mhz,
         "cpuThreads": cpu_threads,
         "cpuUsagePercent": cpu_pct,
+        "cpuAvg1MinPercent": cpu_avg_1min,
         "cpuCores": cpu_cores,
         "loadAvg1": load1,
         "loadAvg5": load5,
