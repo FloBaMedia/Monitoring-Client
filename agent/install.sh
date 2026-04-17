@@ -107,9 +107,11 @@ else
     echo ""
     echo "Please enter your ServerPulse configuration:"
 
+    # When piped through `curl | bash`, stdin is the pipe — redirect reads
+    # from /dev/tty so the user can still type interactively.
     if [[ -z "$API_URL" ]]; then
         while true; do
-            read -rp "  API URL (e.g. https://api.yourdomain.com): " API_URL
+            read -rp "  API URL (e.g. https://api.yourdomain.com): " API_URL </dev/tty
             API_URL="${API_URL%/}"
             if [[ "$API_URL" =~ ^https?:// ]]; then
                 break
@@ -122,7 +124,7 @@ else
 
     if [[ -z "$API_KEY" ]]; then
         while true; do
-            read -rsp "  API Key (sp_live_...): " API_KEY
+            read -rsp "  API Key (sp_live_...): " API_KEY </dev/tty
             echo
             if [[ ${#API_KEY} -ge 8 ]]; then
                 break
