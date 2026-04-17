@@ -28,8 +28,23 @@ $InstallDir  = "C:\ProgramData\ServerPulse"
 $AgentPath   = "$InstallDir\agent.py"
 $ConfPath    = "$InstallDir\agent.conf"
 $LogPath     = "$InstallDir\agent.log"
-$GithubRaw   = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/agent.py"
+$GithubBase  = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
 $TaskName    = "ServerPulseAgent"
+
+# All module files that must be present alongside agent.py
+$ModuleFiles = @(
+    "client/__init__.py",
+    "client/api.py",
+    "models/__init__.py",
+    "models/constants.py",
+    "services/__init__.py",
+    "services/config_applier.py",
+    "services/linux.py",
+    "services/windows.py",
+    "utils/__init__.py",
+    "utils/config.py",
+    "utils/logging.py"
+)
 
 function Write-Info  { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Green }
 function Write-Warn  { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
@@ -64,13 +79,19 @@ if (-not $PythonExe) {
 
 # ── 2. Create install directory ───────────────────────────────────────────────
 Write-Info "Creating $InstallDir ..."
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+foreach ($sub in @("", "\client", "\models", "\services", "\utils")) {
+    New-Item -ItemType Directory -Force -Path "$InstallDir$sub" | Out-Null
+}
 
-# ── 3. Download agent.py ──────────────────────────────────────────────────────
-Write-Info "Downloading agent.py ..."
+# ── 3. Download agent files ───────────────────────────────────────────────────
+Write-Info "Downloading agent files ..."
 try {
-    Invoke-WebRequest -Uri $GithubRaw -OutFile $AgentPath -UseBasicParsing
-    Write-Info "Agent downloaded to $AgentPath"
+    Invoke-WebRequest -Uri "$GithubBase/agent.py" -OutFile $AgentPath -UseBasicParsing
+    foreach ($mod in $ModuleFiles) {
+        $dest = "$InstallDir\" + $mod.Replace("/", "\")
+        Invoke-WebRequest -Uri "$GithubBase/$mod" -OutFile $dest -UseBasicParsing
+    }
+    Write-Info "Agent files downloaded to $InstallDir"
 } catch {
     Write-Err "Download failed: $_"
     exit 1

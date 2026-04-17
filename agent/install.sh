@@ -3,11 +3,26 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh | bash
 set -euo pipefail
 
-GITHUB_RAW="https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/agent.py"
+GITHUB_BASE="https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
 INSTALL_DIR="/etc/serverpulse"
 AGENT_PATH="$INSTALL_DIR/agent.py"
 CONF_PATH="$INSTALL_DIR/agent.conf"
 CRON_MARKER="serverpulse/agent.py"
+
+# All module files that must be present alongside agent.py
+MODULE_FILES=(
+    "client/__init__.py"
+    "client/api.py"
+    "models/__init__.py"
+    "models/constants.py"
+    "services/__init__.py"
+    "services/config_applier.py"
+    "services/linux.py"
+    "services/windows.py"
+    "utils/__init__.py"
+    "utils/config.py"
+    "utils/logging.py"
+)
 
 # ── Colors ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -19,6 +34,15 @@ info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 die()     { error "$*"; exit 1; }
+
+_download() {
+    local url="$1" dest="$2"
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" -o "$dest"
+    else
+        wget -qO "$dest" "$url"
+    fi
+}
 
 # ── 1. Root check ────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -48,19 +72,25 @@ info "Found Python $PY_VER at $(command -v "$PYTHON")"
 
 # ── 3. Create install directory ───────────────────────────────────────────────
 info "Creating $INSTALL_DIR ..."
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR" \
+         "$INSTALL_DIR/client" \
+         "$INSTALL_DIR/models" \
+         "$INSTALL_DIR/services" \
+         "$INSTALL_DIR/utils"
 
-# ── 4. Download agent.py ──────────────────────────────────────────────────────
-info "Downloading agent.py ..."
-if command -v curl &>/dev/null; then
-    curl -fsSL "$GITHUB_RAW" -o "$AGENT_PATH"
-elif command -v wget &>/dev/null; then
-    wget -qO "$AGENT_PATH" "$GITHUB_RAW"
-else
+if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
     die "Neither curl nor wget found. Install one and re-run."
 fi
+
+# ── 4. Download agent files ───────────────────────────────────────────────────
+info "Downloading agent files ..."
+_download "$GITHUB_BASE/agent.py" "$AGENT_PATH"
 chmod 755 "$AGENT_PATH"
-info "Agent installed at $AGENT_PATH"
+
+for mod in "${MODULE_FILES[@]}"; do
+    _download "$GITHUB_BASE/$mod" "$INSTALL_DIR/$mod"
+done
+info "Agent installed in $INSTALL_DIR"
 
 # ── 5. Config (env vars or interactive) ───────────────────────────────────────
 # Accept API_URL / API_KEY from environment so the installer can run non-interactively:
@@ -119,7 +149,8 @@ CRON_LINE="* * * * * $PYTHON $AGENT_PATH"
 if crontab -l 2>/dev/null | grep -qF "$CRON_MARKER"; then
     info "Crontab entry already exists – skipping."
 else
-    (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
+    # `|| true` prevents set -e from aborting when no crontab exists yet (exit 1)
+    { crontab -l 2>/dev/null || true; echo "$CRON_LINE"; } | crontab -
     info "Added crontab entry: $CRON_LINE"
 fi
 

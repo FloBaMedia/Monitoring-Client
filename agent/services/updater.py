@@ -16,9 +16,24 @@ import urllib.request
 from models.constants import AGENT_VERSION
 from utils.logging import log_write
 
-GITHUB_RAW_URL = (
-    "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/agent.py"
-)
+GITHUB_BASE_URL = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
+
+GITHUB_RAW_URL = GITHUB_BASE_URL + "/agent.py"
+
+# Module files updated alongside agent.py
+MODULE_FILES = [
+    "client/__init__.py",
+    "client/api.py",
+    "models/__init__.py",
+    "models/constants.py",
+    "services/__init__.py",
+    "services/config_applier.py",
+    "services/linux.py",
+    "services/windows.py",
+    "utils/__init__.py",
+    "utils/config.py",
+    "utils/logging.py",
+]
 
 # Where the installers place agent.py
 _INSTALL_PATHS = {
@@ -112,30 +127,47 @@ def check_and_update(log_debug_fn=None):
     )
 
     target_path = _installed_path()
+    install_dir = os.path.dirname(target_path)
     backup_path = target_path + ".bak"
 
     try:
-        # 1. Back up current file
+        import ast
+
+        # 1. Validate the remote agent.py before touching anything
+        try:
+            ast.parse(remote_content)
+        except SyntaxError as e:
+            log_write("ERROR", "Auto-update: downloaded agent.py has syntax error – aborting: {}".format(e))
+            return "skipped"
+
+        # 2. Back up and replace agent.py atomically
         if os.path.isfile(target_path):
             shutil.copy2(target_path, backup_path)
             if log_debug_fn:
                 log_debug_fn("Auto-update: backup written to {}".format(backup_path))
 
-        # 2. Write new file atomically (temp file → rename)
         tmp_path = target_path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(remote_content)
-
-        # Basic sanity check: new file must be parseable Python
-        import ast
-        try:
-            ast.parse(remote_content)
-        except SyntaxError as e:
-            os.remove(tmp_path)
-            log_write("ERROR", "Auto-update: downloaded file has syntax error – aborting: {}".format(e))
-            return "skipped"
-
         os.replace(tmp_path, target_path)
+
+        # 3. Update all module files
+        for rel_path in MODULE_FILES:
+            mod_url = GITHUB_BASE_URL + "/" + rel_path
+            ok, mod_content = _fetch(mod_url)
+            if not ok:
+                log_write("WARNING", "Auto-update: could not fetch {} – skipping module".format(rel_path))
+                continue
+            mod_dest = os.path.join(install_dir, rel_path.replace("/", os.sep))
+            mod_dir = os.path.dirname(mod_dest)
+            if not os.path.isdir(mod_dir):
+                os.makedirs(mod_dir)
+            mod_tmp = mod_dest + ".tmp"
+            with open(mod_tmp, "w", encoding="utf-8") as f:
+                f.write(mod_content)
+            os.replace(mod_tmp, mod_dest)
+            if log_debug_fn:
+                log_debug_fn("Auto-update: updated {}".format(rel_path))
 
         log_write(
             "INFO",
@@ -153,10 +185,4 @@ def check_and_update(log_debug_fn=None):
         return "skipped"
     except Exception as e:
         log_write("ERROR", "Auto-update: failed to write new version: {}".format(e))
-        # Attempt rollback
-        if os.path.isfile(backup_path) and os.path.isfile(target_path + ".tmp"):
-            try:
-                os.remove(target_path + ".tmp")
-            except Exception:
-                pass
         return "skipped"
