@@ -1,117 +1,165 @@
 """Windows metric collectors for ServerPulse Agent."""
 
+import json
+import os
 import platform
 import subprocess
 import time
 from datetime import datetime, timezone
 
+# State file for cpuAvg1MinPercent — same pattern as linux.py
+_CPU_SNAP_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ".cpu_snap",
+)
 
-def _wmic(query):
-    """
-    Run a WMIC query and return list of dicts keyed by CSV column header.
-    Falls back to empty list on any error.
-    """
+
+# ── PowerShell helpers ────────────────────────────────────────────────────────
+
+def _ps(ps_cmd, timeout=15):
+    """Run a PowerShell command and return stripped stdout. Empty string on error."""
     from utils.logging import log_write
-
     try:
-        cmd = ["wmic"] + query.split() + ["/FORMAT:CSV"]
-        out = subprocess.check_output(
-            cmd,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-            universal_newlines=True,
-        )
-        lines = [l.strip() for l in out.splitlines() if l.strip()]
-        if len(lines) < 2:
-            return []
-        headers = lines[0].split(",")
-        rows = []
-        for line in lines[1:]:
-            parts = line.split(",")
-            if len(parts) == len(headers):
-                rows.append(dict(zip(headers, parts)))
-        return rows
-    except Exception as e:
-        log_write("WARNING", "wmic failed ({}): {}".format(query[:60], e))
-        return []
-
-
-def _win_powershell(ps_cmd):
-    """Run a PowerShell command and return stdout string. Empty string on error."""
-    from utils.logging import log_write
-
-    try:
-        out = subprocess.check_output(
+        return subprocess.check_output(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
             stderr=subprocess.DEVNULL,
-            timeout=15,
+            timeout=timeout,
             universal_newlines=True,
-        )
-        return out.strip()
+        ).strip()
     except Exception as e:
         log_write("WARNING", "powershell failed: {}".format(e))
         return ""
 
 
+def _ps_json(ps_cmd, timeout=15):
+    """Run PowerShell, parse JSON output. Returns dict/list or None."""
+    raw = _ps(ps_cmd, timeout=timeout)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+# ── CPU ───────────────────────────────────────────────────────────────────────
+
 def _win_cpu():
-    """Returns (cpu_usage_pct, cpu_cores)."""
-    rows = _wmic("cpu get LoadPercentage,NumberOfCores")
-    if rows:
+    """Returns (cpu_pct, cpu_cores) using Get-CimInstance (no WMIC dependency)."""
+    data = _ps_json(
+        "Get-CimInstance Win32_Processor"
+        " | Select-Object LoadPercentage,NumberOfCores"
+        " | ConvertTo-Json -Compress"
+    )
+    if data:
         try:
-            pct = float(rows[0].get("LoadPercentage") or 0)
-            cores = int(rows[0].get("NumberOfCores") or 0)
-            return pct, cores
-        except (ValueError, TypeError):
+            if isinstance(data, list):
+                pcts = [float(d.get("LoadPercentage") or 0) for d in data]
+                cores = sum(int(d.get("NumberOfCores") or 0) for d in data)
+                return round(sum(pcts) / len(pcts), 2), cores
+            return (
+                float(data.get("LoadPercentage") or 0),
+                int(data.get("NumberOfCores") or 0),
+            )
+        except (ValueError, TypeError, ZeroDivisionError):
             pass
 
-    ps = _win_powershell(
-        "(Get-WmiObject Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average"
-    )
+    # Fallback: WMIC (legacy Windows)
+    from utils.logging import log_write
+    log_write("WARNING", "Get-CimInstance CPU failed, falling back to WMIC")
     try:
-        pct = float(ps) if ps else 0.0
-    except ValueError:
-        pct = 0.0
-
-    ps_cores = _win_powershell(
-        "(Get-WmiObject Win32_Processor).NumberOfCores"
-    )
-    try:
-        cores = int(ps_cores.split()[0]) if ps_cores else 0
-    except (ValueError, IndexError):
-        cores = 0
-
-    return pct, cores
+        out = subprocess.check_output(
+            ["wmic", "cpu", "get", "LoadPercentage,NumberOfCores", "/FORMAT:CSV"],
+            stderr=subprocess.DEVNULL, timeout=15, universal_newlines=True,
+        )
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        if len(lines) >= 2:
+            headers = lines[0].split(",")
+            row = dict(zip(headers, lines[1].split(",")))
+            return float(row.get("LoadPercentage") or 0), int(row.get("NumberOfCores") or 0)
+    except Exception:
+        pass
+    return 0.0, 0
 
 
 def _win_cpu_info():
-    """Returns (cpu_model, cpu_mhz, cpu_threads) via WMIC."""
-    model = None
-    mhz = None
-    threads = None
-    rows = _wmic("cpu get Name,MaxClockSpeed,NumberOfLogicalProcessors")
-    if rows:
+    """Returns (cpu_model, cpu_mhz, cpu_threads)."""
+    data = _ps_json(
+        "Get-CimInstance Win32_Processor"
+        " | Select-Object Name,MaxClockSpeed,NumberOfLogicalProcessors"
+        " | ConvertTo-Json -Compress"
+    )
+    if data:
         try:
-            model = rows[0].get("Name") or None
-            mhz_val = rows[0].get("MaxClockSpeed")
-            if mhz_val:
-                mhz = int(mhz_val)
-            threads_val = rows[0].get("NumberOfLogicalProcessors")
-            if threads_val:
-                threads = int(threads_val)
+            if isinstance(data, list):
+                d = data[0]
+                threads = sum(int(x.get("NumberOfLogicalProcessors") or 0) for x in data)
+            else:
+                d = data
+                threads = int(d.get("NumberOfLogicalProcessors") or 0)
+            model = d.get("Name") or None
+            mhz = int(d.get("MaxClockSpeed") or 0) or None
+            return model, mhz, threads or 1
         except (ValueError, TypeError):
             pass
-    return model, mhz, threads
+    return None, None, 1
 
+
+# ── CPU avg via raw performance counter delta ─────────────────────────────────
+
+def _win_cpu_perf_raw():
+    """
+    Read raw performance counter values for % Processor Time.
+    Returns (rv, sv) where rv = busy ticks, sv = total ticks, or None on error.
+    """
+    raw = _ps(
+        "$s=(Get-Counter '\\Processor(_Total)\\% Processor Time')"
+        ".CounterSamples[0];"
+        "@{rv=[long]$s.RawValue;sv=[long]$s.SecondValue}|ConvertTo-Json -Compress"
+    )
+    try:
+        d = json.loads(raw)
+        return int(d["rv"]), int(d["sv"])
+    except Exception:
+        return None
+
+
+def _load_cpu_snap():
+    try:
+        with open(_CPU_SNAP_FILE, "r") as f:
+            d = json.load(f)
+        return d.get("rv"), d.get("sv")
+    except Exception:
+        return None, None
+
+
+def _save_cpu_snap(rv, sv):
+    try:
+        with open(_CPU_SNAP_FILE, "w") as f:
+            json.dump({"rv": rv, "sv": sv, "ts": time.time()}, f)
+    except Exception as e:
+        from utils.logging import log_write
+        log_write("WARNING", "cpu_snap: could not write state file: {}".format(e))
+
+
+# ── Memory ────────────────────────────────────────────────────────────────────
 
 def _win_memory():
     """Returns (total_mb, used_mb, usage_pct, swap_total_mb, swap_used_mb)."""
-    rows = _wmic("OS get TotalVisibleMemorySize,FreePhysicalMemory,TotalVirtualMemorySize,FreeVirtualMemory")
-    if rows:
+    data = _ps_json(
+        "Get-CimInstance Win32_OperatingSystem"
+        " | Select-Object TotalVisibleMemorySize,FreePhysicalMemory,"
+        "TotalVirtualMemorySize,FreeVirtualMemory"
+        " | ConvertTo-Json -Compress"
+    )
+    if data:
+        if isinstance(data, list):
+            data = data[0]
         try:
-            total_kb = int(rows[0].get("TotalVisibleMemorySize") or 0)
-            free_kb = int(rows[0].get("FreePhysicalMemory") or 0)
-            virt_total_kb = int(rows[0].get("TotalVirtualMemorySize") or 0)
-            virt_free_kb = int(rows[0].get("FreeVirtualMemory") or 0)
+            total_kb = int(data.get("TotalVisibleMemorySize") or 0)
+            free_kb = int(data.get("FreePhysicalMemory") or 0)
+            virt_total_kb = int(data.get("TotalVirtualMemorySize") or 0)
+            virt_free_kb = int(data.get("FreeVirtualMemory") or 0)
             total_mb = total_kb // 1024
             used_mb = (total_kb - free_kb) // 1024
             usage_pct = round((used_mb / total_mb) * 100.0, 2) if total_mb > 0 else 0.0
@@ -123,16 +171,27 @@ def _win_memory():
     return 0, 0, 0.0, 0, 0
 
 
+# ── Disk ──────────────────────────────────────────────────────────────────────
+
 def _win_disk():
     """Returns list of disk usage dicts."""
+    data = _ps_json(
+        "Get-CimInstance Win32_LogicalDisk"
+        " | Where-Object {$_.Size -gt 0}"
+        " | Select-Object DeviceID,Size,FreeSpace,FileSystem"
+        " | ConvertTo-Json -Compress"
+    )
+    if data is None:
+        return []
+    if isinstance(data, dict):
+        data = [data]
     result = []
-    rows = _wmic("logicaldisk get DeviceID,Size,FreeSpace,FileSystem")
-    for row in rows:
+    for row in data:
         try:
-            device_id = row.get("DeviceID", "").strip()
+            device_id = (row.get("DeviceID") or "").strip()
             size = int(row.get("Size") or 0)
             free = int(row.get("FreeSpace") or 0)
-            fs = row.get("FileSystem", "").strip()
+            fs = (row.get("FileSystem") or "").strip()
             if size == 0:
                 continue
             total_gb = round(size / (1024 ** 3), 2)
@@ -150,119 +209,205 @@ def _win_disk():
     return result
 
 
+# ── Network ───────────────────────────────────────────────────────────────────
+
 def _win_network():
-    """Returns list of network interface dicts."""
-    result = []
-    rows = _wmic("nic where NetEnabled=TRUE get Name,BytesReceivedPerSecond,BytesSentPerSecond")
-    for row in rows:
-        try:
-            name = row.get("Name", "").strip()
-            rx = int(row.get("BytesReceivedPerSecond") or 0)
-            tx = int(row.get("BytesSentPerSecond") or 0)
-            if not name:
+    """Returns list of network interface stats with bytes and packets."""
+    data = _ps_json(
+        "Get-NetAdapterStatistics -ErrorAction SilentlyContinue"
+        " | Where-Object {$_.ReceivedBytes -gt 0 -or $_.SentBytes -gt 0}"
+        " | Select-Object Name,ReceivedBytes,SentBytes,"
+        "ReceivedUnicastPackets,SentUnicastPackets"
+        " | ConvertTo-Json -Compress"
+    )
+    if data is not None:
+        if isinstance(data, dict):
+            data = [data]
+        result = []
+        for row in data:
+            try:
+                name = (row.get("Name") or "").strip()
+                if not name:
+                    continue
+                result.append({
+                    "name": name,
+                    "rxBytes": int(row.get("ReceivedBytes") or 0),
+                    "txBytes": int(row.get("SentBytes") or 0),
+                    "rxPackets": int(row.get("ReceivedUnicastPackets") or 0),
+                    "txPackets": int(row.get("SentUnicastPackets") or 0),
+                })
+            except (ValueError, TypeError):
                 continue
-            result.append({
-                "name": name,
-                "rxBytes": rx,
-                "txBytes": tx,
-                "rxPackets": 0,
-                "txPackets": 0,
-            })
-        except (ValueError, TypeError):
-            continue
+        if result:
+            return result
 
-    if not result:
-        try:
-            out = subprocess.check_output(
-                ["netstat", "-e"],
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-                universal_newlines=True,
-            )
-            for line in out.splitlines():
-                parts = line.split()
-                if len(parts) == 3 and parts[0].lower() == "bytes":
-                    result.append({
-                        "name": "total",
-                        "rxBytes": int(parts[1]),
-                        "txBytes": int(parts[2]),
-                        "rxPackets": 0,
-                        "txPackets": 0,
-                    })
-                    break
-        except Exception:
-            pass
+    # Fallback: netstat -e (no per-interface data, totals only)
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-e"], stderr=subprocess.DEVNULL,
+            timeout=10, universal_newlines=True,
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) == 3 and parts[0].lower() == "bytes":
+                return [{"name": "total", "rxBytes": int(parts[1]),
+                         "txBytes": int(parts[2]), "rxPackets": 0, "txPackets": 0}]
+    except Exception:
+        pass
+    return []
 
-    return result
 
+# ── I/O ───────────────────────────────────────────────────────────────────────
+
+def _win_io():
+    """Returns (read_kbps, write_kbps) from performance counters."""
+    raw = _ps(
+        "$c=(Get-Counter"
+        " '\\PhysicalDisk(_Total)\\Disk Read Bytes/sec',"
+        " '\\PhysicalDisk(_Total)\\Disk Write Bytes/sec'"
+        " -ErrorAction SilentlyContinue).CounterSamples;"
+        "if($c){@($c[0].CookedValue,$c[1].CookedValue)|ConvertTo-Json -Compress}"
+    )
+    try:
+        vals = json.loads(raw)
+        if isinstance(vals, list) and len(vals) == 2:
+            return round(float(vals[0]) / 1024, 2), round(float(vals[1]) / 1024, 2)
+    except Exception:
+        pass
+    return 0.0, 0.0
+
+
+# ── Open files ────────────────────────────────────────────────────────────────
+
+def _win_open_files():
+    """Returns total handle count as a proxy for open files."""
+    raw = _ps(
+        "(Get-Process -ErrorAction SilentlyContinue"
+        " | Measure-Object -Property Handles -Sum).Sum"
+    )
+    try:
+        return int(float(raw)) if raw else 0
+    except (ValueError, TypeError):
+        return 0
+
+
+# ── Processes ─────────────────────────────────────────────────────────────────
 
 def _win_processes():
+    """Returns total process count."""
+    raw = _ps("(Get-Process -ErrorAction SilentlyContinue | Measure-Object).Count")
     try:
-        rows = _wmic("process get processid")
-        return max(0, len(rows))
-    except Exception:
+        return int(raw) if raw else 0
+    except (ValueError, TypeError):
         return 0
 
 
 def _win_top_processes(limit=10):
-    """Return top processes by CPU using WMIC (best-effort; WorkingSetSize for memory)."""
-    try:
-        rows = _wmic(
-            "process get processid,name,PercentProcessorTime,WorkingSetSize,ExecutablePath"
-        )
-        results = []
-        for row in rows:
-            try:
-                pid = int(row.get("ProcessId") or row.get("processid") or 0)
-                name = (row.get("Name") or row.get("name") or "").strip()
-                cpu = float(row.get("PercentProcessorTime") or 0)
-                mem_bytes = int(row.get("WorkingSetSize") or 0)
-                mem_mb = round(mem_bytes / (1024 * 1024), 1)
-                if not name:
-                    continue
-                results.append({
-                    "pid": pid,
-                    "name": name,
-                    "cpuPercent": round(cpu, 1),
-                    "memMb": mem_mb,
-                })
-            except (ValueError, TypeError):
-                continue
-        results.sort(key=lambda p: p["cpuPercent"], reverse=True)
-        return results[:limit]
-    except Exception:
+    """Returns top processes by CPU using two Get-Process snapshots (~200ms gap)."""
+    script = (
+        "$s1=Get-Process -ErrorAction SilentlyContinue"
+        " | Select-Object Id,Name,CPU,WorkingSet;"
+        "Start-Sleep -Milliseconds 200;"
+        "$s2=Get-Process -ErrorAction SilentlyContinue"
+        " | Select-Object Id,Name,CPU,WorkingSet;"
+        "$m=@{};"
+        "$s1|ForEach-Object{$m[$_.Id]=@{c=$_.CPU;w=$_.WorkingSet;n=$_.Name}};"
+        "$out=@();"
+        "$s2|ForEach-Object{"
+        "  if($m.ContainsKey($_.Id)){"
+        "    $d=[Math]::Max(0,$_.CPU-$m[$_.Id].c);"
+        "    $p=[Math]::Round($d/0.2*100,1);"
+        "    $out+=@{pid=$_.Id;name=$_.Name;cpuPercent=$p;"
+        "            memMb=[Math]::Round($_.WorkingSet/1MB,1);user=''}"
+        "  }"
+        "};"
+        "$out|Sort-Object cpuPercent -Desc"
+        " |Select-Object -First {0}"
+        " |ConvertTo-Json -Compress"
+    ).format(limit)
+    data = _ps_json(script, timeout=20)
+    if not data:
         return []
+    if isinstance(data, dict):
+        data = [data]
+    result = []
+    for row in data:
+        try:
+            result.append({
+                "pid": int(row.get("pid") or 0),
+                "name": str(row.get("name") or ""),
+                "cpuPercent": round(float(row.get("cpuPercent") or 0), 1),
+                "memMb": round(float(row.get("memMb") or 0), 1),
+                "user": "",
+            })
+        except (ValueError, TypeError):
+            continue
+    return result
 
+
+# ── Uptime ────────────────────────────────────────────────────────────────────
 
 def _win_uptime():
     """Returns uptime in seconds."""
     from utils.logging import log_write
-
+    raw = _ps(
+        "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime"
+        " | Get-Date -UFormat '%s'"
+    )
     try:
-        rows = _wmic("os get LastBootUpTime")
-        if rows:
-            boot_str = rows[0].get("LastBootUpTime", "").strip()
-            if len(boot_str) >= 14:
-                boot_dt = datetime.strptime(boot_str[:14], "%Y%m%d%H%M%S")
-                delta = datetime.now(timezone.utc).replace(tzinfo=None) - boot_dt
-                return max(0, int(delta.total_seconds()))
-    except Exception as e:
-        log_write("WARNING", "uptime unavailable: {}".format(e))
+        if raw:
+            return max(0, int(time.time() - float(raw)))
+    except (ValueError, TypeError):
+        pass
+
+    # Fallback: WMIC
+    try:
+        data = _ps_json(
+            "Get-CimInstance Win32_OperatingSystem"
+            " | Select-Object LastBootUpTime | ConvertTo-Json -Compress"
+        )
+        if data:
+            boot_str = str(data.get("LastBootUpTime") or "")
+            # CimInstance serialises DateTime as "/Date(ms)/" or ISO string
+            if boot_str.startswith("/Date("):
+                ms = int(boot_str[6:boot_str.index(")")])
+                return max(0, int(time.time() - ms / 1000))
+    except Exception:
+        pass
+
+    log_write("WARNING", "uptime unavailable")
     return 0
 
 
+# ── Main collector ────────────────────────────────────────────────────────────
+
 def collect_windows_metrics():
-    """Collect all metrics on Windows using WMIC (+ PowerShell fallback)."""
+    """Collect all metrics on Windows using PowerShell / Get-CimInstance."""
     from models.constants import AGENT_VERSION
 
     cpu_pct, cpu_cores = _win_cpu()
     cpu_model, cpu_mhz, cpu_threads = _win_cpu_info()
+
+    # cpuAvg1MinPercent via raw performance counter delta (same idea as /proc/stat on Linux)
+    snap = _win_cpu_perf_raw()
+    cpu_avg_1min = None
+    if snap is not None:
+        rv1, sv1 = snap
+        rv0, sv0 = _load_cpu_snap()
+        if rv0 is not None and sv1 is not None and (sv1 - sv0) > 0:
+            cpu_avg_1min = round(
+                max(0.0, min(100.0, (rv1 - rv0) / (sv1 - sv0) * 100.0)), 2
+            )
+        _save_cpu_snap(rv1, sv1)
+
     top_processes = _win_top_processes()
     mem_total, mem_used, mem_pct, swap_total, swap_used = _win_memory()
     disks = _win_disk()
     networks = _win_network()
     proc_count = _win_processes()
     uptime = _win_uptime()
+    io_read, io_write = _win_io()
+    open_files = _win_open_files()
 
     return {
         "os": platform.version(),
@@ -273,6 +418,7 @@ def collect_windows_metrics():
         "cpuMhz": cpu_mhz,
         "cpuThreads": cpu_threads,
         "cpuUsagePercent": cpu_pct,
+        "cpuAvg1MinPercent": cpu_avg_1min,
         "cpuCores": cpu_cores,
         "loadAvg1": 0.0,
         "loadAvg5": 0.0,
@@ -286,7 +432,7 @@ def collect_windows_metrics():
         "networkInterfaces": networks,
         "processCount": proc_count,
         "topProcesses": top_processes,
-        "openFiles": 0,
-        "ioReadKbps": 0.0,
-        "ioWriteKbps": 0.0,
+        "openFiles": open_files,
+        "ioReadKbps": io_read,
+        "ioWriteKbps": io_write,
     }

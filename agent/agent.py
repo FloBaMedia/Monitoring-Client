@@ -162,10 +162,13 @@ def main():
             log_debug("No remote config received; using local defaults", debug_flag=DEBUG)
 
     # ── Collect metrics ───────────────────────────────────────────────────────
-    is_windows = platform.system() == "Windows"
-    if is_windows:
+    _system = platform.system()
+    if _system == "Windows":
         from services.windows import collect_windows_metrics
         metrics = collect_windows_metrics()
+    elif _system == "Darwin":
+        from services.darwin import collect_darwin_metrics
+        metrics = collect_darwin_metrics()
     else:
         from services.linux import collect_linux_metrics
         metrics = collect_linux_metrics()

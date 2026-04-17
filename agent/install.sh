@@ -19,6 +19,7 @@ MODULE_FILES=(
     "services/__init__.py"
     "services/config_applier.py"
     "services/linux.py"
+    "services/darwin.py"
     "services/windows.py"
     "utils/__init__.py"
     "utils/config.py"
