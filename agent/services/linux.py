@@ -168,12 +168,16 @@ def _read_memory():
     return total_mb, used_mb, usage_pct, swap_total_mb, swap_used_mb
 
 
+_DISK_MAX_ENTRIES = 50
+
+
 def _read_disk_usages():
     """Returns list of disk usage dicts from /proc/mounts."""
     from utils.logging import log_write
 
     result = []
     seen_mountpoints = set()
+    seen_fs_ids = set()  # (f_blocks, f_frsize) — dedup bind-mounts of the same underlying fs
     try:
         with open("/proc/mounts", "r") as f:
             mounts = f.readlines()
@@ -182,6 +186,8 @@ def _read_disk_usages():
         return result
 
     for line in mounts:
+        if len(result) >= _DISK_MAX_ENTRIES:
+            break
         parts = line.split()
         if len(parts) < 3:
             continue
@@ -195,6 +201,12 @@ def _read_disk_usages():
             st = os.statvfs(mountpoint)
             if st.f_blocks == 0:
                 continue
+            # Skip entries whose underlying filesystem was already reported (e.g. Docker
+            # bind-mounts of /etc/hosts that point at the same device as /).
+            fs_id = (st.f_blocks, st.f_frsize)
+            if fs_id in seen_fs_ids:
+                continue
+            seen_fs_ids.add(fs_id)
             total_gb = round((st.f_blocks * st.f_frsize) / (1024 ** 3), 2)
             free_gb = round((st.f_bavail * st.f_frsize) / (1024 ** 3), 2)
             used_gb = round(total_gb - free_gb, 2)
@@ -213,6 +225,9 @@ def _read_disk_usages():
     return result
 
 
+_NETWORK_MAX_ENTRIES = 20
+
+
 def _read_network_interfaces():
     """Returns list of network interface stats from /proc/net/dev."""
     from utils.logging import log_write
@@ -226,6 +241,8 @@ def _read_network_interfaces():
         return result
 
     for line in lines[2:]:
+        if len(result) >= _NETWORK_MAX_ENTRIES:
+            break
         if ":" not in line:
             continue
         name, data = line.split(":", 1)

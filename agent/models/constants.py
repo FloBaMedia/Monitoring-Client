@@ -7,6 +7,8 @@ SKIP_FILESYSTEMS = {
     "pstore", "bpf", "tracefs", "securityfs", "debugfs",
     "hugetlbfs", "mqueue", "fusectl", "configfs", "ramfs",
     "devpts", "overlay", "squashfs", "autofs", "rpc_pipefs",
+    # Container / VM virtual filesystems (can produce hundreds of entries on Docker hosts)
+    "shm", "nsfs", "efivarfs", "binfmt_misc", "selinuxfs",
 }
 
 DISK_PREFIXES = ("sd", "nvme", "vd", "xvd", "hd")
