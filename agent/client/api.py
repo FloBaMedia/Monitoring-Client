@@ -50,11 +50,17 @@ def post_metrics(api_url, api_key, payload, log_debug_fn=None):
     try:
         with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             elapsed = time.time() - t0
+            config_changed_at = None
+            try:
+                resp_data = json.loads(resp.read().decode("utf-8", errors="replace"))
+                config_changed_at = resp_data.get("data", {}).get("configChangedAt")
+            except Exception:
+                pass
             log_write(
                 "INFO",
                 "POST /api/v1/agent/metrics → {} ({:.2f}s, {}B)".format(resp.status, elapsed, len(body)),
             )
-            return True
+            return True, config_changed_at
     except urllib.error.HTTPError as e:
         elapsed = time.time() - t0
         detail = "(unreadable)"
@@ -72,10 +78,10 @@ def post_metrics(api_url, api_key, payload, log_debug_fn=None):
             "ERROR",
             "POST /api/v1/agent/metrics → {} ({:.2f}s, {}B): {}".format(e.code, elapsed, len(body), detail),
         )
-        return False
+        return False, None
     except Exception as e:
         log_write("ERROR", "POST /api/v1/agent/metrics failed: {}".format(e))
-        return False
+        return False, None
 
 
 def get_config(api_url, api_key, log_debug_fn=None):

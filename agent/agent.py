@@ -10,6 +10,8 @@ Usage:
   python agent.py --no-apply-config       # skip fetching and applying remote config
 """
 
+import json
+import os
 import platform
 import subprocess
 import sys
@@ -17,6 +19,27 @@ import sys
 from models.constants import AGENT_VERSION, DEFAULT_API_URL
 from utils.config import ensure_config, load_config
 from utils.logging import log_debug, log_write
+
+# Persists the last-seen configChangedAt so config is only re-fetched when it changes.
+_CONFIG_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".config_state")
+
+
+def _load_config_state():
+    """Returns (configChangedAt, cached_config_dict) from state file, or (None, {})."""
+    try:
+        with open(_CONFIG_STATE_FILE, "r") as f:
+            data = json.load(f)
+        return data.get("configChangedAt"), data.get("config", {})
+    except Exception:
+        return None, {}
+
+
+def _save_config_state(config_changed_at, config_dict):
+    try:
+        with open(_CONFIG_STATE_FILE, "w") as f:
+            json.dump({"configChangedAt": config_changed_at, "config": config_dict}, f)
+    except Exception as e:
+        log_write("WARNING", "config_state: could not write state file: {}".format(e))
 
 
 def parse_args():
@@ -141,25 +164,11 @@ def main():
         )
         sys.exit(0 if ok else 1)
 
-    # ── Fetch and apply remote server configuration ───────────────────────────
-    remote_config = {}
-    if not dry_run and not no_apply_config:
-        from client.api import get_config
-        from services.config_applier import apply_config, run_extra_commands
-
-        log_debug("Fetching remote server config...", debug_flag=DEBUG)
-        config_ok, remote_config = get_config(
-            api_url, api_key, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
-        )
-        if config_ok and remote_config:
-            apply_config(remote_config, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
-
-            # ── Auto-update ──────────────────────────────────────────────────
-            if remote_config.get("enableAutoUpdates"):
-                from services.updater import check_and_update
-                check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
-        else:
-            log_debug("No remote config received; using local defaults", debug_flag=DEBUG)
+    # ── Load cached config state ──────────────────────────────────────────────
+    # Config is only re-fetched when the server signals it changed (via configChangedAt
+    # in the POST /metrics response). The cached copy is used for extraCommands and
+    # enableAutoUpdates on every run without an extra GET request.
+    stored_changed_at, remote_config = (None, {}) if (dry_run or no_apply_config) else _load_config_state()
 
     # ── Collect metrics ───────────────────────────────────────────────────────
     _system = platform.system()
@@ -181,7 +190,34 @@ def main():
         sys.exit(0)
 
     from client.api import post_metrics
-    ok = post_metrics(api_url, api_key, metrics, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+    ok, config_changed_at = post_metrics(
+        api_url, api_key, metrics, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
+    )
+
+    # ── Fetch and apply config only when it changed ───────────────────────────
+    if ok and not no_apply_config and config_changed_at != stored_changed_at:
+        from client.api import get_config
+        from services.config_applier import apply_config
+
+        if stored_changed_at is None:
+            log_debug("No cached config — fetching for the first time", debug_flag=DEBUG)
+        else:
+            log_debug("Config changed on server — re-fetching", debug_flag=DEBUG)
+
+        config_ok, fetched_config = get_config(
+            api_url, api_key, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
+        )
+        if config_ok and fetched_config:
+            apply_config(fetched_config, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+            remote_config = fetched_config
+            _save_config_state(config_changed_at, remote_config)
+        else:
+            log_debug("Could not fetch config from server", debug_flag=DEBUG)
+
+    # ── Auto-update (uses cached enableAutoUpdates) ───────────────────────────
+    if ok and not no_apply_config and remote_config.get("enableAutoUpdates"):
+        from services.updater import check_and_update
+        check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
 
     # ── Run extraCommands after successful metrics post ───────────────────────
     if ok and remote_config:
