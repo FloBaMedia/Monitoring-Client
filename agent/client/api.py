@@ -63,15 +63,24 @@ def post_metrics(api_url, api_key, payload, log_debug_fn=None):
             return True, config_changed_at
     except urllib.error.HTTPError as e:
         elapsed = time.time() - t0
-        detail = "(unreadable)"
+        detail = "(no body)"
         try:
-            raw = e.read().decode("utf-8", errors="replace")[:2000]
-            detail = raw
-            err_info = json.loads(raw).get("error", {})
-            detail = "{} — {}".format(
-                err_info.get("code", "ERROR"),
-                err_info.get("message", raw),
-            )
+            raw = e.read().decode("utf-8", errors="replace")
+            content_type = e.headers.get("Content-Type", "")
+            if "application/json" in content_type:
+                # Our API or a JSON-speaking proxy (parse structured error)
+                err_info = json.loads(raw).get("error", {})
+                detail = "{} — {}".format(
+                    err_info.get("code", "ERROR"),
+                    err_info.get("message", raw[:500]),
+                )
+            else:
+                # HTML error page (Cloudflare, nginx, etc.) — extract first meaningful line
+                first_line = next(
+                    (l.strip() for l in raw.splitlines() if l.strip() and not l.strip().startswith("<")),
+                    raw[:200],
+                )
+                detail = "gateway error: {}".format(first_line[:200])
         except Exception:
             pass
         log_write(
@@ -80,7 +89,8 @@ def post_metrics(api_url, api_key, payload, log_debug_fn=None):
         )
         return False, None
     except Exception as e:
-        log_write("ERROR", "POST /api/v1/agent/metrics failed: {}".format(e))
+        log_write("ERROR", "POST /api/v1/agent/metrics failed after {:.2f}s: {}".format(
+            time.time() - t0, e))
         return False, None
 
 
