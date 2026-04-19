@@ -3,7 +3,7 @@
 import os
 import platform
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 LOG_MAX_BYTES = 1_048_576
 
@@ -16,7 +16,7 @@ def _get_log_path():
 
 def log_write(level, message, debug=False):
     """Write a log line to the log file. Also writes to stderr in debug mode."""
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = "[{}] {:<7} {}\n".format(ts, level, message)
 
     if debug:
