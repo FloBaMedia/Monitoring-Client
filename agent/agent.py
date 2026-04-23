@@ -219,14 +219,6 @@ def main():
         from services.updater import check_and_update
         check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
 
-    # ── Run extraCommands after successful metrics post ───────────────────────
-    if ok and remote_config:
-        extra_commands = remote_config.get("extraCommands")
-        if extra_commands:
-            from services.config_applier import run_extra_commands
-            log_debug("Running {} extra command(s)".format(len(extra_commands)), debug_flag=DEBUG)
-            run_extra_commands(extra_commands)
-
     sys.exit(0 if ok else 1)
 
 

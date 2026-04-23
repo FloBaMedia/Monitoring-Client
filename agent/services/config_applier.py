@@ -262,49 +262,6 @@ def update_schedule(interval_seconds):
         return False
 
 
-# ── Extra Commands ────────────────────────────────────────────────────────────
-
-def run_extra_commands(extra_commands):
-    """
-    Execute extraCommands from config. Each entry is a dict with 'command' and 'schedule'.
-    All commands are executed on every agent run (schedule is informational only).
-    Returns the number of successfully executed commands.
-    """
-    if not extra_commands or not isinstance(extra_commands, list):
-        return 0
-
-    is_windows = platform.system() == "Windows"
-    success_count = 0
-
-    for entry in extra_commands:
-        if not isinstance(entry, dict):
-            continue
-        command = entry.get("command", "").strip()
-        if not command:
-            continue
-
-        log_write("INFO", "Running extra command: {}".format(command))
-        if is_windows:
-            cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-Command", command]
-        else:
-            cmd = ["bash", "-c", command]
-
-        ok, stdout, stderr = _run(cmd, timeout=60)
-        if stdout:
-            for line in stdout.splitlines():
-                log_write("INFO", "[extra] {}".format(line))
-        if stderr:
-            for line in stderr.splitlines():
-                log_write("WARNING", "[extra] {}".format(line))
-
-        if ok:
-            success_count += 1
-        else:
-            log_write("WARNING", "Extra command failed: {}".format(command))
-
-    return success_count
-
-
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def apply_config(config, log_debug_fn=None):
