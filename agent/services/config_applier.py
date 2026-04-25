@@ -7,13 +7,21 @@ import os
 import platform
 import re
 import subprocess
+import sys
 import tempfile
 
+from models.limits import CONFIG_APPLIER_TIMEOUT, EXTRA_CMD_TIMEOUT, STATE_ENCODING
+from utils.lock import atomic_write
 from utils.logging import log_write
+from utils.validation import (
+    validate_and_sanitize_dns,
+    validate_and_sanitize_interval,
+    validate_and_sanitize_ntp,
+    validate_and_sanitize_timezone,
+)
 
 
-def _run(cmd, timeout=30):
-    """Run a subprocess command. Returns (success, stdout, stderr)."""
+def _run(cmd, timeout=CONFIG_APPLIER_TIMEOUT):
     try:
         result = subprocess.run(
             cmd,
@@ -30,54 +38,61 @@ def _run(cmd, timeout=30):
         return False, "", str(e)
 
 
-# ── Timezone ──────────────────────────────────────────────────────────────────
-
 def apply_timezone(timezone):
-    """Set system timezone cross-platform. Returns True on success."""
     if not timezone:
         return True
+
+    valid, tz = validate_and_sanitize_timezone(timezone)
+    if not valid:
+        log_write("WARNING", "Invalid timezone rejected: {}".format(timezone))
+        return False
+
     if platform.system() == "Windows":
         ok, _, err = _run(
-            ["powershell", "-Command", "Set-TimeZone -Id '{}'".format(timezone)]
+            ["powershell", "-Command", "Set-TimeZone -Id '{}'".format(tz)]
         )
     else:
-        ok, _, err = _run(["timedatectl", "set-timezone", timezone])
+        ok, _, err = _run(["timedatectl", "set-timezone", tz])
 
     if ok:
-        log_write("INFO", "Timezone set to {}".format(timezone))
+        log_write("INFO", "Timezone set to {}".format(tz))
     else:
-        log_write("WARNING", "Failed to set timezone {}: {}".format(timezone, err))
+        log_write("WARNING", "Failed to set timezone {}: {}".format(tz, err))
     return ok
 
 
-# ── Locale ────────────────────────────────────────────────────────────────────
-
 def apply_locale(locale):
-    """Set system locale (Linux via localectl). Returns True on success."""
     if not locale:
         return True
     if platform.system() != "Linux":
-        return True  # Only supported on Linux
+        return True
 
-    ok, _, err = _run(["localectl", "set-locale", "LANG={}".format(locale)])
+    safe_locale = "".join(c for c in locale if c.isalnum() or c in "_-.")
+    if safe_locale != locale or len(safe_locale) > 100:
+        log_write("WARNING", "Invalid locale rejected: {}".format(locale))
+        return False
+
+    ok, _, err = _run(["localectl", "set-locale", "LANG={}".format(safe_locale)])
     if ok:
-        log_write("INFO", "Locale set to {}".format(locale))
+        log_write("INFO", "Locale set to {}".format(safe_locale))
     else:
-        log_write("WARNING", "Failed to set locale {}: {}".format(locale, err))
+        log_write("WARNING", "Failed to set locale {}: {}".format(safe_locale, err))
     return ok
 
 
-# ── NTP ───────────────────────────────────────────────────────────────────────
-
 def apply_ntp(custom_ntp):
-    """Configure a custom NTP server. Returns True on success."""
     if not custom_ntp:
         return True
+
+    valid, ntp = validate_and_sanitize_ntp(custom_ntp)
+    if not valid:
+        log_write("WARNING", "Invalid NTP server rejected: {}".format(custom_ntp))
+        return False
 
     if platform.system() == "Windows":
         ok, _, err = _run([
             "w32tm", "/config",
-            "/manualpeerlist:{}".format(custom_ntp),
+            "/manualpeerlist:{}".format(ntp),
             "/syncfromflags:manual",
             "/reliable:YES",
             "/update",
@@ -89,25 +104,29 @@ def apply_ntp(custom_ntp):
         conf_path = "/etc/systemd/timesyncd.conf"
         try:
             try:
-                with open(conf_path, "r") as f:
+                with open(conf_path, "r", encoding=STATE_ENCODING) as f:
                     content = f.read()
             except FileNotFoundError:
                 content = "[Time]\n"
 
+            safe_ntp = "".join(c for c in ntp if c.isalnum() or c in ".-_")
+            if safe_ntp != ntp:
+                log_write("WARNING", "NTP server sanitized: {} -> {}".format(ntp, safe_ntp))
+                ntp = safe_ntp
+
             if re.search(r"^NTP\s*=", content, re.MULTILINE):
                 content = re.sub(
                     r"^NTP\s*=.*$",
-                    "NTP={}".format(custom_ntp),
+                    "NTP={}".format(ntp),
                     content,
                     flags=re.MULTILINE,
                 )
             elif "[Time]" in content:
-                content = content.replace("[Time]", "[Time]\nNTP={}".format(custom_ntp), 1)
+                content = content.replace("[Time]", "[Time]\nNTP={}".format(ntp), 1)
             else:
-                content += "\n[Time]\nNTP={}\n".format(custom_ntp)
+                content += "\n[Time]\nNTP={}\n".format(ntp)
 
-            with open(conf_path, "w") as f:
-                f.write(content)
+            atomic_write(conf_path, content, encoding=STATE_ENCODING)
             ok, _, err = _run(["systemctl", "restart", "systemd-timesyncd"])
         except PermissionError:
             log_write("WARNING", "No permission to update timesyncd.conf – run agent as root")
@@ -117,38 +136,35 @@ def apply_ntp(custom_ntp):
             return False
 
     if ok:
-        log_write("INFO", "NTP server set to {}".format(custom_ntp))
+        log_write("INFO", "NTP server set to {}".format(ntp))
     else:
-        log_write("WARNING", "Failed to configure NTP {}: {}".format(custom_ntp, err))
+        log_write("WARNING", "Failed to configure NTP {}: {}".format(ntp, err))
     return ok
 
 
-# ── DNS ───────────────────────────────────────────────────────────────────────
-
 def apply_dns(custom_dns):
-    """Configure custom DNS servers (list of IP strings). Returns True on success."""
     if not custom_dns or not isinstance(custom_dns, list):
         return True
 
+    valid, dns_list = validate_and_sanitize_dns(custom_dns)
+    if not valid:
+        log_write("WARNING", "Invalid DNS list rejected: {}".format(custom_dns))
+        return True
+
     if platform.system() == "Windows":
+        dns_args = ", ".join("'{}'".format(d) for d in dns_list)
         ps_cmd = (
             "$adapter = (Get-NetAdapter | Where-Object {{ $_.Status -eq 'Up' }} "
             "| Select-Object -First 1).Name; "
-            "Set-DnsClientServerAddress -InterfaceAlias $adapter -ServerAddresses ({})".format(
-                ", ".join("'{}'".format(d) for d in custom_dns)
-            )
+            "Set-DnsClientServerAddress -InterfaceAlias $adapter -ServerAddresses ({})".format(dns_args)
         )
         ok, _, err = _run(["powershell", "-Command", ps_cmd])
     else:
         try:
-            # Note: systems using systemd-resolved or NetworkManager may
-            # regenerate /etc/resolv.conf on the next network event, overwriting
-            # these changes. For persistent DNS, configure via those services instead.
             lines = ["# Managed by ServerPulse Agent\n"]
-            for dns in custom_dns:
+            for dns in dns_list:
                 lines.append("nameserver {}\n".format(dns))
-            with open("/etc/resolv.conf", "w") as f:
-                f.writelines(lines)
+            atomic_write("/etc/resolv.conf", "".join(lines), encoding=STATE_ENCODING)
             ok, err = True, ""
         except PermissionError:
             log_write("WARNING", "No permission to update /etc/resolv.conf – run agent as root")
@@ -158,19 +174,13 @@ def apply_dns(custom_dns):
             return False
 
     if ok:
-        log_write("INFO", "DNS servers set to {}".format(", ".join(custom_dns)))
+        log_write("INFO", "DNS servers set to {}".format(", ".join(dns_list)))
     else:
         log_write("WARNING", "Failed to set DNS servers: {}".format(err))
     return ok
 
 
-# ── Schedule ──────────────────────────────────────────────────────────────────
-
 def _interval_to_cron(interval_seconds):
-    """
-    Convert an interval in seconds to a cron expression.
-    Minimum resolution is 1 minute (cron limitation).
-    """
     minutes = max(1, round(interval_seconds / 60))
     if minutes == 1:
         return "* * * * *"
@@ -183,21 +193,21 @@ def _interval_to_cron(interval_seconds):
         return "0 * * * *"
     if hours <= 12 and 24 % hours == 0:
         return "0 */{} * * *".format(hours)
-    return "0 0 * * *"  # fallback: daily
+    return "0 0 * * *"
 
 
 def update_schedule(interval_seconds):
-    """
-    Update the cron (Linux) or Scheduled Task (Windows) to the given interval.
-    No-op if interval is already 60 seconds (the install default).
-    Returns True if updated successfully or no change needed.
-    """
-    if not interval_seconds or interval_seconds == 60:
+    valid, interval = validate_and_sanitize_interval(interval_seconds)
+    if not valid:
+        log_write("WARNING", "Invalid interval rejected: {}".format(interval_seconds))
+        return True
+
+    if interval == 60:
         return True
 
     if platform.system() == "Windows":
         task_name = "ServerPulseAgent"
-        interval_minutes = max(1, round(interval_seconds / 60))
+        interval_minutes = max(1, round(interval / 60))
         ps_cmd = (
             "$t = Get-ScheduledTask -TaskName '{task}' -ErrorAction SilentlyContinue; "
             "if ($t) {{ "
@@ -218,7 +228,7 @@ def update_schedule(interval_seconds):
         log_write("WARNING", "Failed to update scheduled task: {}".format(err))
         return False
     else:
-        cron_expr = _interval_to_cron(interval_seconds)
+        cron_expr = _interval_to_cron(interval)
         _, current_cron, _ = _run(["crontab", "-l"])
 
         lines = current_cron.splitlines() if current_cron else []
@@ -232,7 +242,6 @@ def update_schedule(interval_seconds):
                 continue
             if "serverpulse/agent.py" in line:
                 parts = stripped.split()
-                # cron line format: min hour dom mon dow cmd [args...]
                 if len(parts) >= 6:
                     cmd_part = " ".join(parts[5:])
                     new_lines.append("{} {}".format(cron_expr, cmd_part))
@@ -245,30 +254,130 @@ def update_schedule(interval_seconds):
             return False
 
         new_cron = "\n".join(new_lines) + "\n"
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".cron", delete=False) as tmp:
-            tmp.write(new_cron)
-            tmp_path = tmp.name
-
-        ok, _, err = _run(["crontab", tmp_path])
+        tmp_path = None
         try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".cron", delete=False, encoding=STATE_ENCODING) as tmp:
+                tmp.write(new_cron)
+                tmp_path = tmp.name
+            ok, _, err = _run(["crontab", tmp_path])
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
         if ok:
-            log_write("INFO", "Cron interval updated to '{}' ({} seconds)".format(cron_expr, interval_seconds))
+            log_write("INFO", "Cron interval updated to '{}' ({} seconds)".format(cron_expr, interval))
             return True
         log_write("WARNING", "Failed to update crontab: {}".format(err))
         return False
 
 
-# ── Main entry point ──────────────────────────────────────────────────────────
+# ── Template Scheduling ───────────────────────────────────────────────────────
+
+_TEMPLATE_CRON_MARKER = "# serverpulse-template-"
+
+
+def _validate_cron_expr(expr):
+    parts = expr.strip().split()
+    if len(parts) != 5:
+        return False
+    allowed = set("0123456789*/-,")
+    return all(all(c in allowed for c in p) for p in parts)
+
+
+def _write_crontab(lines):
+    new_cron = "\n".join(lines) + "\n"
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".cron", delete=False, encoding=STATE_ENCODING) as tmp:
+            tmp.write(new_cron)
+            tmp_path = tmp.name
+        return _run(["crontab", tmp_path])
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def schedule_template(template_id, cron_expr):
+    """
+    Install or update a cron job for a template script.
+    Pass cron_expr='remove' to unschedule.
+    Only supported on Linux.
+    """
+    safe_id = "".join(c for c in template_id if c.isalnum() or c == "-")
+    if safe_id != template_id or not safe_id:
+        log_write("WARNING", "Invalid template_id rejected: {}".format(template_id))
+        return False
+
+    if cron_expr == "remove":
+        return unschedule_template(template_id)
+
+    if platform.system() != "Linux":
+        log_write("WARNING", "Template scheduling via --schedule is only supported on Linux")
+        return False
+
+    if not _validate_cron_expr(cron_expr):
+        log_write("WARNING", "Invalid cron expression: {}".format(cron_expr))
+        return False
+
+    agent_path = os.path.abspath(sys.argv[0])
+    marker = "{}{}".format(_TEMPLATE_CRON_MARKER, safe_id)
+    cron_line = "{} python3 {} --apply-template {}  {}".format(
+        cron_expr, agent_path, safe_id, marker
+    )
+
+    _, current_cron, _ = _run(["crontab", "-l"])
+    lines = current_cron.splitlines() if current_cron else []
+    new_lines = []
+    updated = False
+    for line in lines:
+        if marker in line:
+            new_lines.append(cron_line)
+            updated = True
+        else:
+            new_lines.append(line)
+    if not updated:
+        new_lines.append(cron_line)
+
+    ok, _, err = _write_crontab(new_lines)
+    if ok:
+        log_write("INFO", "Template {} scheduled: {}".format(safe_id, cron_expr))
+    else:
+        log_write("WARNING", "Failed to schedule template {}: {}".format(safe_id, err))
+    return ok
+
+
+def unschedule_template(template_id):
+    """Remove the cron entry for a template. Only supported on Linux."""
+    safe_id = "".join(c for c in template_id if c.isalnum() or c == "-")
+    marker = "{}{}".format(_TEMPLATE_CRON_MARKER, safe_id)
+
+    if platform.system() != "Linux":
+        log_write("WARNING", "Template unscheduling is only supported on Linux")
+        return False
+
+    _, current_cron, _ = _run(["crontab", "-l"])
+    lines = current_cron.splitlines() if current_cron else []
+    new_lines = [l for l in lines if marker not in l]
+
+    if len(new_lines) == len(lines):
+        log_write("INFO", "No scheduled cron entry found for template {}".format(safe_id))
+        return True
+
+    ok, _, err = _write_crontab(new_lines)
+    if ok:
+        log_write("INFO", "Template {} unscheduled".format(safe_id))
+    else:
+        log_write("WARNING", "Failed to unschedule template {}: {}".format(safe_id, err))
+    return ok
+
 
 def apply_config(config, log_debug_fn=None):
-    """
-    Apply all settings from the API config dict to the local system.
-    Returns reportIntervalSeconds so the caller can use it for scheduling.
-    """
     if not config:
         return 60
 

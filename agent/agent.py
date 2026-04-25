@@ -6,7 +6,9 @@ Usage:
   python agent.py                          # normal run (reads config, POSTs metrics)
   python agent.py --dry-run                # print collected metrics as JSON, no HTTP
   python agent.py --config /path/to.conf  # override config file path
-  python agent.py --apply-template <id>   # fetch and execute a server template
+  python agent.py --apply-template <id>                    # fetch and execute a server template
+  python agent.py --apply-template <id> --schedule "0 3 * * *"  # schedule template via cron
+  python agent.py --apply-template <id> --schedule remove        # remove scheduled cron entry
   python agent.py --no-apply-config       # skip fetching and applying remote config
 """
 
@@ -17,17 +19,18 @@ import subprocess
 import sys
 
 from models.constants import AGENT_VERSION, DEFAULT_API_URL
+from models.limits import SCRIPT_EXEC_TIMEOUT, STATE_ENCODING
 from utils.config import ensure_config, load_config
+from utils.lock import FileLock, atomic_write
 from utils.logging import log_debug, log_write
 
-# Persists the last-seen configChangedAt so config is only re-fetched when it changes.
 _CONFIG_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".config_state")
+_CONFIG_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".config_state.lock")
 
 
 def _load_config_state():
-    """Returns (configChangedAt, cached_config_dict) from state file, or (None, {})."""
     try:
-        with open(_CONFIG_STATE_FILE, "r") as f:
+        with open(_CONFIG_STATE_FILE, "r", encoding=STATE_ENCODING) as f:
             data = json.load(f)
         return data.get("configChangedAt"), data.get("config", {})
     except Exception:
@@ -36,20 +39,19 @@ def _load_config_state():
 
 def _save_config_state(config_changed_at, config_dict):
     try:
-        with open(_CONFIG_STATE_FILE, "w") as f:
-            json.dump({"configChangedAt": config_changed_at, "config": config_dict}, f)
+        atomic_write(_CONFIG_STATE_FILE, json.dumps({"configChangedAt": config_changed_at, "config": config_dict}), encoding=STATE_ENCODING)
     except Exception as e:
         log_write("WARNING", "config_state: could not write state file: {}".format(e))
 
 
 def parse_args():
-    """Minimal arg parsing without argparse. Returns (dry_run, debug, config_path, template_id, no_apply_config)."""
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
     debug = "--debug" in args
     no_apply_config = "--no-apply-config" in args
     config_path = None
     template_id = None
+    schedule = None
     if "--config" in args:
         idx = args.index("--config")
         if idx + 1 < len(args):
@@ -58,14 +60,14 @@ def parse_args():
         idx = args.index("--apply-template")
         if idx + 1 < len(args):
             template_id = args[idx + 1]
-    return dry_run, debug, config_path, template_id, no_apply_config
+    if "--schedule" in args:
+        idx = args.index("--schedule")
+        if idx + 1 < len(args):
+            schedule = args[idx + 1]
+    return dry_run, debug, config_path, template_id, schedule, no_apply_config
 
 
 def execute_script(script_content, log_debug_fn=None):
-    """
-    Execute a shell script locally.
-    Returns (success, stdout, stderr, returncode).
-    """
     if log_debug_fn:
         log_debug_fn("Executing script ({} chars)".format(len(script_content)))
 
@@ -84,7 +86,7 @@ def execute_script(script_content, log_debug_fn=None):
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=300,
+            timeout=SCRIPT_EXEC_TIMEOUT,
             shell=shell,
         )
         result.stdout = result.stdout.decode("utf-8", errors="replace")
@@ -104,17 +106,14 @@ def execute_script(script_content, log_debug_fn=None):
 
         return success, result.stdout, result.stderr, result.returncode
     except subprocess.TimeoutExpired:
-        log_write("ERROR", "Script execution timed out after 300 seconds")
-        return False, "", "Timeout after 300 seconds", -1
+        log_write("ERROR", "Script execution timed out after {} seconds".format(SCRIPT_EXEC_TIMEOUT))
+        return False, "", "Timeout after {} seconds".format(SCRIPT_EXEC_TIMEOUT), -1
     except Exception as e:
         log_write("ERROR", "Script execution failed: {}".format(e))
         return False, "", str(e), -1
 
 
 def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn=None):
-    """
-    Fetch a template from the API and execute its scriptContent if available.
-    """
     from client.api import apply_template
 
     log_write("INFO", "Fetching template {} for server {}...".format(template_id, server_id))
@@ -133,7 +132,7 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
 
 
 def main():
-    dry_run, cli_debug, config_override, template_id, no_apply_config = parse_args()
+    dry_run, cli_debug, config_override, template_id, schedule, no_apply_config = parse_args()
     DEBUG = cli_debug
 
     values, conf_path = load_config(config_override)
@@ -155,6 +154,11 @@ def main():
     api_key = values.get("api_key", "")
 
     if template_id:
+        if schedule is not None:
+            from services.config_applier import schedule_template
+            ok = schedule_template(template_id, schedule)
+            sys.exit(0 if ok else 1)
+
         server_id = values.get("server_id", "")
         if not server_id:
             log_write("ERROR", "server_id not configured. Cannot apply template.")
@@ -164,13 +168,16 @@ def main():
         )
         sys.exit(0 if ok else 1)
 
-    # ── Load cached config state ──────────────────────────────────────────────
-    # Config is only re-fetched when the server signals it changed (via configChangedAt
-    # in the POST /metrics response). The cached copy is used for extraCommands and
-    # enableAutoUpdates on every run without an extra GET request.
+    config_lock = FileLock(_CONFIG_LOCK_FILE, timeout=30)
+    if not config_lock.acquire(blocking=False):
+        log_write("WARNING", "Config state locked by another process, skipping config update")
+        no_apply_config = True
+
     stored_changed_at, remote_config = (None, {}) if (dry_run or no_apply_config) else _load_config_state()
 
-    # ── Collect metrics ───────────────────────────────────────────────────────
+    if not no_apply_config:
+        config_lock.release()
+
     _system = platform.system()
     if _system == "Windows":
         from services.windows import collect_windows_metrics
@@ -185,7 +192,6 @@ def main():
     log_debug("Metrics collected successfully", debug_flag=DEBUG)
 
     if dry_run:
-        import json
         print(json.dumps(metrics, indent=2))
         sys.exit(0)
 
@@ -194,7 +200,6 @@ def main():
         api_url, api_key, metrics, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
     )
 
-    # ── Fetch and apply config only when it changed ───────────────────────────
     if ok and not no_apply_config and config_changed_at != stored_changed_at:
         from client.api import get_config
         from services.config_applier import apply_config
@@ -214,7 +219,6 @@ def main():
         else:
             log_debug("Could not fetch config from server", debug_flag=DEBUG)
 
-    # ── Auto-update (uses cached enableAutoUpdates) ───────────────────────────
     if ok and not no_apply_config and remote_config.get("enableAutoUpdates"):
         from services.updater import check_and_update
         check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
