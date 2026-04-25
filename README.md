@@ -18,7 +18,6 @@ Lightweight monitoring agent for [ServerPulse](https://github.com/FloBaMedia/Mon
 - Non-interactive install via environment variables (for automated deployments)
 - Remote server configuration: timezone, locale, NTP, DNS, reporting interval
 - Agent auto-update from GitHub (opt-in, controlled via the dashboard)
-- Extra commands executed after each metrics report
 
 ---
 
@@ -26,31 +25,39 @@ Lightweight monitoring agent for [ServerPulse](https://github.com/FloBaMedia/Mon
 
 ### Linux / macOS
 
+**Important:** Always download and inspect scripts before running them with elevated privileges.
+
 ```bash
-curl -sSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh | \
-  SERVERPULSE_URL=https://your-api.example.com SERVERPULSE_KEY=sp_live_... bash
+# 1. Download the installer
+curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh -o /tmp/install.sh
+
+# 2. Review the script before running
+cat /tmp/install.sh
+
+# 3. Make it executable and run with your credentials
+chmod +x /tmp/install.sh
+SERVERPULSE_URL=https://your-api.example.com SERVERPULSE_KEY=sp_live_... sudo /tmp/install.sh
 ```
 
 Or interactive (prompts for API URL and key):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh -o /tmp/install.sh
+chmod +x /tmp/install.sh
+sudo /tmp/install.sh
 ```
 
 ### Windows (PowerShell, run as Administrator)
 
 ```powershell
-$env:SERVERPULSE_URL='https://your-api.example.com'
-$env:SERVERPULSE_KEY='sp_live_...'
-iex (iwr -useb 'https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install-windows.ps1').Content
-```
+# 1. Download the installer
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install-windows.ps1' -OutFile $env:TEMP\install-serverpulse.ps1
 
-Or with explicit parameters:
+# 2. Review the script before running
+Get-Content $env:TEMP\install-serverpulse.ps1
 
-```powershell
-powershell -ExecutionPolicy Bypass -File install-windows.ps1 `
-  -ApiUrl "https://your-api.example.com" `
-  -ApiKey "sp_live_..."
+# 3. Execute with your credentials
+& $env:TEMP\install-serverpulse.ps1 -ApiUrl "https://your-api.example.com" -ApiKey "sp_live_..."
 ```
 
 > **Tip:** The ServerPulse dashboard generates the exact command with your API key pre-filled after you add a new server.
@@ -108,7 +115,6 @@ The agent fetches its configuration from `GET /api/v1/agent/config` on every run
 | `customNtp` | Configures NTP server (`timesyncd.conf` / `w32tm`) |
 | `customDns` | Updates DNS servers (`/etc/resolv.conf` / `Set-DnsClientServerAddress`) |
 | `reportIntervalSeconds` | Updates the cron / scheduled task interval |
-| `extraCommands` | Executes commands after each metrics report |
 | `enableAutoUpdates` | Enables automatic agent self-update from GitHub |
 
 All remote config settings can be managed from the **Config tab** in the ServerPulse dashboard.
@@ -179,15 +185,20 @@ agent/
 ├── client/
 │   └── api.py                # HTTP client for all API calls
 ├── models/
-│   └── constants.py          # Shared constants (version, defaults)
+│   ├── constants.py          # Shared constants (version, defaults)
+│   └── limits.py             # Magic numbers and timeout limits
 ├── services/
-│   ├── linux.py              # Linux/macOS metric collectors
+│   ├── linux.py              # Linux metric collectors
 │   ├── windows.py            # Windows metric collectors
+│   ├── darwin.py             # macOS metric collectors
 │   ├── config_applier.py     # Applies remote config to the local system
 │   └── updater.py            # Agent self-update logic
 └── utils/
     ├── config.py             # Config file loading and interactive setup
-    └── logging.py            # File-based logger with rotation
+    ├── logging.py            # File-based logger with rotation
+    ├── validation.py         # Input validation (command injection prevention)
+    ├── lock.py               # File locking with stale detection
+    └── snapshot.py           # CPU snapshot persistence (cross-platform)
 ```
 
 ---

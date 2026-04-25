@@ -16,14 +16,19 @@ MODULE_FILES=(
     "client/api.py"
     "models/__init__.py"
     "models/constants.py"
+    "models/limits.py"
     "services/__init__.py"
     "services/config_applier.py"
     "services/linux.py"
     "services/darwin.py"
     "services/windows.py"
+    "services/updater.py"
     "utils/__init__.py"
     "utils/config.py"
     "utils/logging.py"
+    "utils/validation.py"
+    "utils/lock.py"
+    "utils/snapshot.py"
 )
 
 # ── Colors ──────────────────────────────────────────────────────────────────

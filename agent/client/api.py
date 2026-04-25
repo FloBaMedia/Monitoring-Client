@@ -1,4 +1,4 @@
-"""HTTP client for ServerPulse Agent API communication."""
+"""HTTP client for ServerPulse API."""
 
 import json
 import math
@@ -6,195 +6,95 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urljoin
+
 from models.constants import AGENT_VERSION
+from models.limits import API_POST_TIMEOUT, API_GET_TIMEOUT, API_TEMPLATE_TIMEOUT
 
 
-def _sanitize(obj):
-    """Recursively replace non-finite floats (NaN, Infinity) with 0.0.
-
-    Python's json.dumps emits bare NaN / Infinity tokens for non-finite floats,
-    which are not valid JSON and cause JavaScript's JSON.parse to throw.
-    """
-    if isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj):
-            return 0.0
-        return obj
-    if isinstance(obj, dict):
-        return {k: _sanitize(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize(v) for v in obj]
-    return obj
-
-
-def post_metrics(api_url, api_key, payload, log_debug_fn=None):
-    """POST the metrics payload to the API. Returns True on success."""
-    from utils.logging import log_write
-
-    url = "{}/api/v1/agent/metrics".format(api_url)
-    try:
-        body = json.dumps(_sanitize(payload), allow_nan=False).encode("utf-8")
-    except (ValueError, TypeError) as e:
-        log_write("ERROR", "post_metrics: failed to serialize payload: {}".format(e))
-        return False
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("X-Server-Key", api_key)
-    req.add_header("User-Agent", "ServerPulse-Agent/{}".format(AGENT_VERSION))
-
-    if log_debug_fn:
-        log_debug_fn("POST {} ({} bytes)".format(url, len(body)))
-        log_debug_fn("Payload: {}".format(json.dumps(_sanitize(payload), indent=2)))
-
-    ctx = ssl.create_default_context()
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            elapsed = time.time() - t0
-            config_changed_at = None
-            try:
-                resp_data = json.loads(resp.read().decode("utf-8", errors="replace"))
-                config_changed_at = resp_data.get("data", {}).get("configChangedAt")
-            except Exception:
-                pass
-            log_write(
-                "INFO",
-                "POST /api/v1/agent/metrics → {} ({:.2f}s, {}B)".format(resp.status, elapsed, len(body)),
-            )
-            return True, config_changed_at
-    except urllib.error.HTTPError as e:
-        elapsed = time.time() - t0
-        detail = "(no body)"
-        try:
-            raw = e.read().decode("utf-8", errors="replace")
-            content_type = e.headers.get("Content-Type", "")
-            if "application/json" in content_type:
-                # Our API or a JSON-speaking proxy (parse structured error)
-                err_info = json.loads(raw).get("error", {})
-                detail = "{} — {}".format(
-                    err_info.get("code", "ERROR"),
-                    err_info.get("message", raw[:500]),
-                )
+def _sanitize_payload(payload):
+    if not isinstance(payload, dict):
+        return payload
+    result = {}
+    for k, v in payload.items():
+        if isinstance(v, float):
+            if math.isnan(v) or math.isinf(v):
+                result[k] = None
             else:
-                # HTML error page (Cloudflare, nginx, etc.) — extract first meaningful line
-                first_line = next(
-                    (l.strip() for l in raw.splitlines() if l.strip() and not l.strip().startswith("<")),
-                    raw[:200],
+                result[k] = v
+        elif isinstance(v, dict):
+            result[k] = _sanitize_payload(v)
+        elif isinstance(v, list):
+            result[k] = [
+                _sanitize_payload(item) if isinstance(item, dict) else (
+                    None if isinstance(item, (float)) and (math.isnan(item) or math.isinf(item)) else item
                 )
-                detail = "gateway error: {}".format(first_line[:200])
-        except Exception:
-            pass
-        log_write(
-            "ERROR",
-            "POST /api/v1/agent/metrics → {} ({:.2f}s, {}B): {}".format(e.code, elapsed, len(body), detail),
-        )
-        return False, None
+                for item in v
+            ]
+        else:
+            result[k] = v
+    return result
+
+
+def _request(method, base_url, path, api_key, body=None, timeout=10, log_debug_fn=None):
+    url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+    headers = {
+        "Content-Type": "application/json",
+        "X-Server-Key": api_key,
+        "User-Agent": "ServerPulseAgent/{}".format(AGENT_VERSION),
+    }
+
+    data = None
+    if body is not None:
+        try:
+            data = json.dumps(_sanitize_payload(body)).encode("utf-8")
+        except (TypeError, ValueError):
+            return False, None, "JSON serialization failed"
+
+    start = time.time()
+    try:
+        ctx = ssl.create_default_context()
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+            resp_body = resp.read().decode("utf-8", errors="replace")
+            elapsed = round(time.time() - start, 3)
+            if log_debug_fn:
+                log_debug_fn("{} {} -> {} in {}s".format(method, url, resp.status, elapsed))
+            try:
+                result = json.loads(resp_body) if resp_body else {}
+                return True, result, None
+            except json.JSONDecodeError:
+                return True, resp_body, None
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        elapsed = round(time.time() - start, 3)
+        if log_debug_fn:
+            log_debug_fn("{} {} -> HTTP {} in {}s".format(method, url, e.code, elapsed))
+        return False, None, "HTTP {}: {}".format(e.code, body[:200])
+    except urllib.error.URLError as e:
+        elapsed = round(time.time() - start, 3)
+        if log_debug_fn:
+            log_debug_fn("{} {} -> ERROR {} in {}s".format(method, url, e.reason, elapsed))
+        return False, None, str(e.reason)
     except Exception as e:
-        log_write("ERROR", "POST /api/v1/agent/metrics failed after {:.2f}s: {}".format(
-            time.time() - t0, e))
+        elapsed = round(time.time() - start, 3)
+        if log_debug_fn:
+            log_debug_fn("{} {} -> ERROR {} in {}s".format(method, url, e, elapsed))
+        return False, None, str(e)
+
+
+def post_metrics(api_url, api_key, metrics, log_debug_fn=None):
+    ok, result, err = _request("POST", api_url, "api/v1/agent/metrics", api_key, metrics, timeout=API_POST_TIMEOUT, log_debug_fn=log_debug_fn)
+    if not ok:
         return False, None
+    config_changed_at = result.get("configChangedAt") if isinstance(result, dict) else None
+    return True, config_changed_at
 
 
 def get_config(api_url, api_key, log_debug_fn=None):
-    """
-    Call GET /api/v1/agent/config to fetch the server configuration.
-    Returns (success, config_dict) where config_dict contains timezone, reportIntervalSeconds,
-    enableAutoUpdates, customNtp, customDns, locale, extraCommands.
-    """
-    url = "{}/api/v1/agent/config".format(api_url)
-    req = urllib.request.Request(url, method="GET")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("X-Server-Key", api_key)
-    req.add_header("User-Agent", "ServerPulse-Agent/{}".format(AGENT_VERSION))
-
-    if log_debug_fn:
-        log_debug_fn("GET {}".format(url))
-
-    ctx = ssl.create_default_context()
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            elapsed = time.time() - t0
-            response_body = resp.read().decode("utf-8", errors="replace")
-            from utils.logging import log_write
-            log_write(
-                "INFO",
-                "GET /api/v1/agent/config → {} ({:.2f}s)".format(resp.status, elapsed),
-            )
-            try:
-                data = json.loads(response_body)
-                return True, data.get("data", {})
-            except json.JSONDecodeError:
-                log_write("ERROR", "Failed to parse JSON response from get_config")
-                return True, {}
-    except urllib.error.HTTPError as e:
-        elapsed = time.time() - t0
-        try:
-            body_text = e.read().decode("utf-8", errors="replace")[:2000]
-        except Exception:
-            body_text = "(unreadable)"
-        from utils.logging import log_write
-        log_write(
-            "ERROR",
-            "GET /api/v1/agent/config → {} ({:.2f}s): {}".format(e.code, elapsed, body_text),
-        )
-        return False, {}
-    except Exception as e:
-        from utils.logging import log_write
-        log_write("ERROR", "GET /api/v1/agent/config failed: {}".format(e))
-        return False, {}
+    return _request("GET", api_url, "api/v1/agent/config", api_key, timeout=API_GET_TIMEOUT, log_debug_fn=log_debug_fn)
 
 
 def apply_template(api_url, api_key, template_id, server_id, log_debug_fn=None):
-    """
-    Call POST /api/v1/templates/:id/apply/:serverId to apply a template.
-    Returns (success, result_dict) where result_dict contains scriptContent if available.
-    """
-    url = "{}/api/v1/templates/{}/apply/{}".format(api_url, template_id, server_id)
-    body = json.dumps({}).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("X-Server-Key", api_key)
-    req.add_header("User-Agent", "ServerPulse-Agent/{}".format(AGENT_VERSION))
-
-    if log_debug_fn:
-        log_debug_fn("POST {} ({} bytes)".format(url, len(body)))
-
-    ctx = ssl.create_default_context()
-    t0 = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-            elapsed = time.time() - t0
-            response_body = resp.read().decode("utf-8", errors="replace")
-            from utils.logging import log_write
-            log_write(
-                "INFO",
-                "POST /api/v1/templates/{}/apply/{} → {} ({:.2f}s)".format(
-                    template_id, server_id, resp.status, elapsed
-                ),
-            )
-            try:
-                data = json.loads(response_body)
-                return True, data.get("data", {})
-            except json.JSONDecodeError:
-                log_write("ERROR", "Failed to parse JSON response from applyTemplate")
-                return True, {}
-    except urllib.error.HTTPError as e:
-        elapsed = time.time() - t0
-        try:
-            body_text = e.read().decode("utf-8", errors="replace")[:2000]
-        except Exception:
-            body_text = "(unreadable)"
-        from utils.logging import log_write
-        log_write(
-            "ERROR",
-            "POST /api/v1/templates/{}/apply/{} → {} ({:.2f}s): {}".format(
-                template_id, server_id, e.code, elapsed, body_text
-            ),
-        )
-        return False, {}
-    except Exception as e:
-        from utils.logging import log_write
-        log_write(
-            "ERROR", "POST /api/v1/templates/{}/apply/{} failed: {}".format(template_id, server_id, e)
-        )
-        return False, {}
+    path = "api/v1/templates/{}/apply/{}".format(template_id, server_id)
+    return _request("POST", api_url, path, api_key, timeout=API_TEMPLATE_TIMEOUT, log_debug_fn=log_debug_fn)

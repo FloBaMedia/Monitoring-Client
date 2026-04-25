@@ -1,36 +1,44 @@
 """Linux metric collectors for ServerPulse Agent."""
 
-import json
 import os
 import platform
 import time
 from models.constants import SKIP_FILESYSTEMS, DISK_PREFIXES
+from models.limits import (
+    CPU_HZ_DEFAULT,
+    CPU_SNAP_INTERVAL_SEC,
+    DISK_MAX_ENTRIES,
+    NETWORK_MAX_ENTRIES,
+    STATE_ENCODING,
+    TOP_PROCESS_LIMIT,
+)
+from utils.lock import FileLock
+from utils.logging import log_write
+from utils.snapshot import CpuSnapStore
 
-# Persists the previous CPU snapshot so the next run can calculate a ~1-minute average.
 _CPU_SNAP_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     ".cpu_snap",
 )
+_LOCK_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ".cpu_snap.lock",
+)
+_snap_store = CpuSnapStore(_CPU_SNAP_FILE)
 
 
 def _parse_proc_stat():
-    """Read /proc/stat and return the aggregate CPU line fields as ints."""
     try:
         with open("/proc/stat", "r") as f:
             for line in f:
                 if line.startswith("cpu "):
-                    parts = line.split()
-                    return [int(x) for x in parts[1:]]
+                    return [int(x) for x in line.split()[1:]]
     except Exception:
         pass
     return None
 
 
 def _parse_proc_diskstats():
-    """
-    Read /proc/diskstats and return dict of {devname: (sectors_read, sectors_written)}.
-    Only includes whole physical disks (no partitions).
-    """
     result = {}
     try:
         with open("/proc/diskstats", "r") as f:
@@ -46,16 +54,13 @@ def _parse_proc_diskstats():
                         continue
                 elif devname[-1].isdigit():
                     continue
-                sectors_read = int(parts[5])
-                sectors_written = int(parts[9])
-                result[devname] = (sectors_read, sectors_written)
+                result[devname] = (int(parts[5]), int(parts[9]))
     except Exception:
         pass
     return result
 
 
 def _calc_cpu_delta(snap0, snap1):
-    """Calculate CPU usage % from two /proc/stat snapshots."""
     if snap0 is None or snap1 is None or len(snap0) < 4 or len(snap1) < 4:
         return 0.0
     idle0 = snap0[3] + (snap0[4] if len(snap0) > 4 else 0)
@@ -70,7 +75,6 @@ def _calc_cpu_delta(snap0, snap1):
 
 
 def _calc_io_delta(snap0, snap1, elapsed):
-    """Calculate IO read/write kbps from two diskstats snapshots."""
     read_sectors = 0
     write_sectors = 0
     all_devs = set(snap0.keys()) | set(snap1.keys())
@@ -87,41 +91,16 @@ def _calc_io_delta(snap0, snap1, elapsed):
 
 
 def _take_proc_snapshot():
-    """Read CPU and disk snapshots together with a timestamp."""
     return _parse_proc_stat(), _parse_proc_diskstats(), time.time()
 
 
 def _calc_deltas(snap0, snap1):
-    """
-    Compute CPU % and IO kbps from two snapshots returned by _take_proc_snapshot().
-    Returns (cpu_percent, io_read_kbps, io_write_kbps).
-    """
     cpu0, disk0, t0 = snap0
     cpu1, disk1, t1 = snap1
     elapsed = t1 - t0
     cpu_pct = _calc_cpu_delta(cpu0, cpu1)
     io_read, io_write = _calc_io_delta(disk0, disk1, elapsed)
     return cpu_pct, io_read, io_write
-
-
-def _load_cpu_snap():
-    """Load the persisted CPU snapshot from the previous run. Returns (fields, ts) or None."""
-    try:
-        with open(_CPU_SNAP_FILE, "r") as f:
-            data = json.load(f)
-        return data["fields"], data["ts"]
-    except Exception:
-        return None
-
-
-def _save_cpu_snap(fields, ts):
-    """Persist a CPU snapshot for use by the next run."""
-    try:
-        with open(_CPU_SNAP_FILE, "w") as f:
-            json.dump({"fields": fields, "ts": ts}, f)
-    except Exception as e:
-        from utils.logging import log_write
-        log_write("WARNING", "cpu_snap: could not write state file: {}".format(e))
 
 
 def _read_cpu_cores():
@@ -133,13 +112,11 @@ def _read_cpu_cores():
                     count += 1
         return max(count, 1)
     except Exception as e:
-        from utils.logging import log_write
         log_write("WARNING", "cpu_cores unavailable: {}".format(e))
         return 0
 
 
 def _read_cpu_info():
-    """Returns (cpu_model, cpu_mhz, cpu_threads) from /proc/cpuinfo."""
     model = None
     mhz = None
     threads = 0
@@ -156,7 +133,6 @@ def _read_cpu_info():
                     except (ValueError, OverflowError):
                         pass
     except Exception as e:
-        from utils.logging import log_write
         log_write("WARNING", "cpu_info unavailable: {}".format(e))
     return model, mhz, max(threads, 1)
 
@@ -167,13 +143,11 @@ def _read_load_avg():
             parts = f.read().split()
             return float(parts[0]), float(parts[1]), float(parts[2])
     except Exception as e:
-        from utils.logging import log_write
         log_write("WARNING", "loadavg unavailable: {}".format(e))
         return 0.0, 0.0, 0.0
 
 
 def _read_memory():
-    """Returns (total_mb, used_mb, usage_pct, swap_total_mb, swap_used_mb)."""
     result = {"MemTotal": 0, "MemAvailable": 0, "SwapTotal": 0, "SwapFree": 0}
     try:
         with open("/proc/meminfo", "r") as f:
@@ -182,7 +156,6 @@ def _read_memory():
                     if line.startswith(key + ":"):
                         result[key] = int(line.split()[1])
     except Exception as e:
-        from utils.logging import log_write
         log_write("WARNING", "meminfo unavailable: {}".format(e))
         return 0, 0, 0.0, 0, 0
 
@@ -195,16 +168,10 @@ def _read_memory():
     return total_mb, used_mb, usage_pct, swap_total_mb, swap_used_mb
 
 
-_DISK_MAX_ENTRIES = 50
-
-
 def _read_disk_usages():
-    """Returns list of disk usage dicts from /proc/mounts."""
-    from utils.logging import log_write
-
     result = []
     seen_mountpoints = set()
-    seen_fs_ids = set()  # (f_blocks, f_frsize) — dedup bind-mounts of the same underlying fs
+    seen_fs_ids = set()
     try:
         with open("/proc/mounts", "r") as f:
             mounts = f.readlines()
@@ -213,7 +180,7 @@ def _read_disk_usages():
         return result
 
     for line in mounts:
-        if len(result) >= _DISK_MAX_ENTRIES:
+        if len(result) >= DISK_MAX_ENTRIES:
             break
         parts = line.split()
         if len(parts) < 3:
@@ -228,8 +195,6 @@ def _read_disk_usages():
             st = os.statvfs(mountpoint)
             if st.f_blocks == 0:
                 continue
-            # Skip entries whose underlying filesystem was already reported (e.g. Docker
-            # bind-mounts of /etc/hosts that point at the same device as /).
             fs_id = (st.f_blocks, st.f_frsize)
             if fs_id in seen_fs_ids:
                 continue
@@ -252,13 +217,7 @@ def _read_disk_usages():
     return result
 
 
-_NETWORK_MAX_ENTRIES = 20
-
-
 def _read_network_interfaces():
-    """Returns list of network interface stats from /proc/net/dev."""
-    from utils.logging import log_write
-
     result = []
     try:
         with open("/proc/net/dev", "r") as f:
@@ -268,7 +227,7 @@ def _read_network_interfaces():
         return result
 
     for line in lines[2:]:
-        if len(result) >= _NETWORK_MAX_ENTRIES:
+        if len(result) >= NETWORK_MAX_ENTRIES:
             break
         if ":" not in line:
             continue
@@ -293,8 +252,7 @@ def _read_network_interfaces():
     return result
 
 
-def _read_top_processes(limit=10):
-    """Return top `limit` processes sorted by CPU % using two /proc snapshots."""
+def _read_top_processes(limit=TOP_PROCESS_LIMIT):
     try:
         def _read_proc_stats():
             stats = {}
@@ -313,7 +271,7 @@ def _read_top_processes(limit=10):
             return stats
 
         snap0 = _read_proc_stats()
-        time.sleep(0.2)
+        time.sleep(CPU_SNAP_INTERVAL_SEC)
         snap1 = _read_proc_stats()
 
         mem_total = 0
@@ -326,13 +284,12 @@ def _read_top_processes(limit=10):
         except Exception:
             pass
 
-        hz = 100  # typical Linux USER_HZ
         results = []
         for pid, s1 in snap1.items():
             if pid not in snap0:
                 continue
             delta = s1["ticks"] - snap0[pid]["ticks"]
-            cpu_pct = round((delta / hz) / 0.2 * 100.0, 1)
+            cpu_pct = round((delta / CPU_HZ_DEFAULT) / CPU_SNAP_INTERVAL_SEC * 100.0, 1)
             mem_mb = 0.0
             user = ""
             try:
@@ -360,7 +317,6 @@ def _read_top_processes(limit=10):
         results.sort(key=lambda p: p["cpuPercent"], reverse=True)
         return results[:limit]
     except Exception as e:
-        from utils.logging import log_write
         log_write("WARNING", "top_processes unavailable: {}".format(e))
         return []
 
@@ -369,7 +325,6 @@ def _read_process_count():
     try:
         return sum(1 for d in os.listdir("/proc") if d.isdigit())
     except Exception as e:
-        from utils.logging import log_write
         log_write("WARNING", "process_count unavailable: {}".format(e))
         return 0
 
@@ -379,7 +334,6 @@ def _read_open_files():
         with open("/proc/sys/fs/file-nr", "r") as f:
             return int(f.read().split()[0])
     except Exception as e:
-        from utils.logging import log_write
         log_write("WARNING", "open_files unavailable: {}".format(e))
         return 0
 
@@ -400,33 +354,27 @@ def _read_uptime():
         with open("/proc/uptime", "r") as f:
             return int(float(f.read().split()[0]))
     except Exception as e:
-        from utils.logging import log_write
         log_write("WARNING", "uptime unavailable: {}".format(e))
         return 0
 
 
 def collect_linux_metrics():
-    """Collect all metrics on Linux.
-
-    CPU and IO deltas are measured across the _read_top_processes() call
-    (~200 ms internal sleep) plus surrounding reads, giving roughly a 1-second
-    window without any extra sleep.  This provides ~1% CPU resolution at the
-    standard 100 Hz Linux tick rate.
-    """
     from models.constants import AGENT_VERSION
 
-    # Snapshot 0 — before the blocking work
+    with FileLock(_LOCK_FILE, timeout=30) as lock:
+        if not lock._acquired:
+            log_write("WARNING", "cpu_snap locked by another process, skipping snapshot update")
+
     snap0 = _take_proc_snapshot()
 
-    # Calculate 1-minute CPU average using the snapshot saved by the previous run.
-    prev_snap = _load_cpu_snap()
+    prev_snap = _snap_store.load()
     if prev_snap is not None:
         prev_fields, prev_ts = prev_snap
         cpu_avg_1min = _calc_cpu_delta(prev_fields, snap0[0])
         cpu_avg_1min = round(max(0.0, min(100.0, cpu_avg_1min)), 2)
     else:
         cpu_avg_1min = None
-    _save_cpu_snap(snap0[0], snap0[2])
+    _snap_store.save(snap0[0], snap0[2])
 
     cpu_cores = _read_cpu_cores()
     cpu_model, cpu_mhz, cpu_threads = _read_cpu_info()
@@ -435,13 +383,12 @@ def collect_linux_metrics():
     disks = _read_disk_usages()
     networks = _read_network_interfaces()
     proc_count = _read_process_count()
-    top_processes = _read_top_processes()  # contains a ~200ms sleep
+    top_processes = _read_top_processes()
     open_files = _read_open_files()
     os_info = _read_os_info()
     uptime = _read_uptime()
     kernel = platform.release()
 
-    # Snapshot 1 — after; window is typically 800ms–1.5s depending on disk count
     snap1 = _take_proc_snapshot()
     cpu_pct, io_read, io_write = _calc_deltas(snap0, snap1)
     cpu_pct = max(0.0, min(100.0, cpu_pct))
