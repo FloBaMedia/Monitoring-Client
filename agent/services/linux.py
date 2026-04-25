@@ -1,7 +1,9 @@
 """Linux metric collectors for ServerPulse Agent."""
 
+import json
 import os
 import platform
+import subprocess
 import time
 from models.constants import SKIP_FILESYSTEMS, DISK_PREFIXES
 from models.limits import (
@@ -16,14 +18,12 @@ from utils.lock import FileLock
 from utils.logging import log_write
 from utils.snapshot import CpuSnapStore
 
-_CPU_SNAP_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    ".cpu_snap",
-)
-_LOCK_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    ".cpu_snap.lock",
-)
+_AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CPU_SNAP_FILE = os.path.join(_AGENT_DIR, ".cpu_snap")
+_LOCK_FILE = os.path.join(_AGENT_DIR, ".cpu_snap.lock")
+_APT_CACHE_FILE = os.path.join(_AGENT_DIR, ".apt_cache")
+_APT_CACHE_TTL = 1800  # 30 minutes
+
 _snap_store = CpuSnapStore(_CPU_SNAP_FILE)
 
 
@@ -358,6 +358,60 @@ def _read_uptime():
         return 0
 
 
+def _read_pending_updates():
+    """Return (count, security_count, packages) from apt, with 30-min file cache."""
+    try:
+        now = time.time()
+        try:
+            with open(_APT_CACHE_FILE, "r") as f:
+                cached = json.load(f)
+            if now - cached.get("ts", 0) < _APT_CACHE_TTL:
+                return cached["count"], cached["security_count"], cached["packages"]
+        except Exception:
+            pass
+
+        result = subprocess.run(
+            ["apt", "list", "--upgradable"],
+            capture_output=True, text=True, timeout=30,
+        )
+        packages = []
+        for line in result.stdout.splitlines():
+            if line.startswith("Listing") or not line.strip():
+                continue
+            try:
+                # Format: name/repo version arch [upgradable from: old_version]
+                pkg_part, rest = line.split("/", 1)
+                tokens = rest.split()
+                repo = tokens[0] if tokens else ""
+                new_ver = tokens[1] if len(tokens) > 1 else ""
+                old_ver = ""
+                if "upgradable from:" in line:
+                    old_ver = line.split("upgradable from:")[-1].strip().rstrip("]")
+                is_security = "-security" in repo
+                packages.append({
+                    "name": pkg_part.strip(),
+                    "currentVersion": old_ver,
+                    "newVersion": new_ver,
+                    "security": is_security,
+                })
+            except Exception:
+                continue
+
+        count = len(packages)
+        security_count = sum(1 for p in packages if p["security"])
+        try:
+            with open(_APT_CACHE_FILE, "w") as f:
+                json.dump({"ts": now, "count": count, "security_count": security_count, "packages": packages}, f)
+        except Exception:
+            pass
+        return count, security_count, packages
+    except FileNotFoundError:
+        return None, None, None
+    except Exception as e:
+        log_write("WARNING", "apt check failed: {}".format(e))
+        return None, None, None
+
+
 def collect_linux_metrics():
     from models.constants import AGENT_VERSION
 
@@ -393,6 +447,8 @@ def collect_linux_metrics():
     cpu_pct, io_read, io_write = _calc_deltas(snap0, snap1)
     cpu_pct = max(0.0, min(100.0, cpu_pct))
 
+    pending_count, pending_security_count, pending_packages = _read_pending_updates()
+
     return {
         "os": os_info,
         "kernelVersion": kernel,
@@ -419,4 +475,7 @@ def collect_linux_metrics():
         "openFiles": open_files,
         "ioReadKbps": io_read,
         "ioWriteKbps": io_write,
+        "pendingUpdates": pending_count,
+        "pendingSecurityUpdates": pending_security_count,
+        "pendingPackages": pending_packages,
     }
