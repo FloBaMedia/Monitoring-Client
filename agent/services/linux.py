@@ -22,7 +22,7 @@ _AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CPU_SNAP_FILE = os.path.join(_AGENT_DIR, ".cpu_snap")
 _LOCK_FILE = os.path.join(_AGENT_DIR, ".cpu_snap.lock")
 _APT_CACHE_FILE = os.path.join(_AGENT_DIR, ".apt_cache")
-_APT_CACHE_TTL = 1800  # 30 minutes
+_APT_CACHE_TTL = 300  # 5 minutes
 
 _snap_store = CpuSnapStore(_CPU_SNAP_FILE)
 
