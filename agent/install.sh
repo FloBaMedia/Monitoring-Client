@@ -186,10 +186,16 @@ fi
 
 # ── 8. First test run ─────────────────────────────────────────────────────────
 echo ""
-info "Running first test (dry-run, no HTTP request) ..."
+info "Verifying agent (collecting metrics, no HTTP request) ..."
 echo "─────────────────────────────────────────────"
-"$PYTHON" "$AGENT_PATH" --dry-run
-echo "─────────────────────────────────────────────"
+if "$PYTHON" "$AGENT_PATH" --check; then
+    echo "─────────────────────────────────────────────"
+    info "Metrics collection: OK"
+else
+    echo "─────────────────────────────────────────────"
+    warn "Agent check failed — verify Python and config, then run:"
+    warn "  $PYTHON $AGENT_PATH --check"
+fi
 
 echo ""
 info "Installation complete!"

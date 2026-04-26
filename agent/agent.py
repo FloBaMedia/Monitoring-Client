@@ -45,8 +45,10 @@ def _save_config_state(config_changed_at, config_dict):
 
 
 def parse_args():
+    """Minimal arg parsing without argparse."""
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
+    check = "--check" in args
     debug = "--debug" in args
     no_apply_config = "--no-apply-config" in args
     config_path = None
@@ -64,7 +66,41 @@ def parse_args():
         idx = args.index("--schedule")
         if idx + 1 < len(args):
             schedule = args[idx + 1]
-    return dry_run, debug, config_path, template_id, schedule, no_apply_config
+    return dry_run, check, debug, config_path, template_id, schedule, no_apply_config
+
+
+def _print_check(metrics):
+    """Print a compact human-readable summary of collected metrics."""
+    disks = metrics.get("diskUsages", [])
+    nets = metrics.get("networkInterfaces", [])
+    top = metrics.get("topProcesses", [])
+    print("  OS:        {}".format(metrics.get("os", "?")))
+    print("  Kernel:    {}".format(metrics.get("kernelVersion", "?")))
+    print("  CPU:       {}% (cores: {}, threads: {})".format(
+        metrics.get("cpuUsagePercent", 0),
+        metrics.get("cpuCores", "?"),
+        metrics.get("cpuThreads", "?"),
+    ))
+    print("  RAM:       {}% ({}/{} MB)".format(
+        metrics.get("memUsagePercent", 0),
+        metrics.get("memUsedMb", 0),
+        metrics.get("memTotalMb", 0),
+    ))
+    print("  Disks:     {} found{}".format(
+        len(disks),
+        " — " + ", ".join(
+            "{} ({:.0f}%)".format(d["mountpoint"], d["usagePercent"]) for d in disks[:3]
+        ) if disks else "",
+    ))
+    print("  Network:   {} interface(s)".format(len(nets)))
+    print("  Processes: {}".format(metrics.get("processCount", 0)))
+    if metrics.get("pendingUpdates") is not None:
+        print("  Updates:   {} pending ({} security)".format(
+            metrics.get("pendingUpdates", 0),
+            metrics.get("pendingSecurityUpdates", 0),
+        ))
+    if top:
+        print("  Top proc:  {} ({:.1f}% CPU)".format(top[0]["name"], top[0]["cpuPercent"]))
 
 
 def execute_script(script_content, log_debug_fn=None):
@@ -132,7 +168,7 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
 
 
 def main():
-    dry_run, cli_debug, config_override, template_id, schedule, no_apply_config = parse_args()
+    dry_run, check, cli_debug, config_override, template_id, schedule, no_apply_config = parse_args()
     DEBUG = cli_debug
 
     values, conf_path = load_config(config_override)
@@ -190,6 +226,10 @@ def main():
         metrics = collect_linux_metrics()
 
     log_debug("Metrics collected successfully", debug_flag=DEBUG)
+
+    if check:
+        _print_check(metrics)
+        sys.exit(0)
 
     if dry_run:
         print(json.dumps(metrics, indent=2))
