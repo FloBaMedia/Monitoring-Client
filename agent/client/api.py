@@ -101,6 +101,13 @@ def get_config(api_url, api_key, log_debug_fn=None):
     return True, config, services
 
 
+def post_discovered_ports(api_url, api_key, ports, log_debug_fn=None):
+    ok, result, err = _request("POST", api_url, "api/v1/agent/ports", api_key, {"ports": ports}, timeout=API_POST_TIMEOUT, log_debug_fn=log_debug_fn)
+    if not ok:
+        return False, err
+    return True, None
+
+
 def apply_template(api_url, api_key, template_id, server_id, log_debug_fn=None):
     path = "api/v1/templates/{}/apply/{}".format(template_id, server_id)
     return _request("POST", api_url, path, api_key, timeout=API_TEMPLATE_TIMEOUT, log_debug_fn=log_debug_fn)

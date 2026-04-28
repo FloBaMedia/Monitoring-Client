@@ -69,6 +69,7 @@ def parse_args():
     check = "--check" in args
     debug = "--debug" in args
     no_apply_config = "--no-apply-config" in args
+    discover_ports = "--discover-ports" in args
     config_path = None
     template_id = None
     schedule = None
@@ -84,7 +85,7 @@ def parse_args():
         idx = args.index("--schedule")
         if idx + 1 < len(args):
             schedule = args[idx + 1]
-    return dry_run, check, debug, config_path, template_id, schedule, no_apply_config
+    return dry_run, check, debug, config_path, template_id, schedule, no_apply_config, discover_ports
 
 
 def _print_check(metrics):
@@ -186,7 +187,7 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
 
 
 def main():
-    dry_run, check, cli_debug, config_override, template_id, schedule, no_apply_config = parse_args()
+    dry_run, check, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
     DEBUG = cli_debug
 
     values, conf_path = load_config(config_override)
@@ -220,6 +221,24 @@ def main():
         ok = apply_template_script(
             api_url, api_key, template_id, server_id, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
         )
+        sys.exit(0 if ok else 1)
+
+    if discover_ports:
+        _system = platform.system()
+        if _system != "Linux":
+            log_write("ERROR", "--discover-ports is only supported on Linux")
+            sys.exit(1)
+        from services.linux import read_listening_ports
+        from client.api import post_discovered_ports
+        ports = read_listening_ports()
+        print("Found {} listening TCP port(s): {}".format(
+            len(ports), ", ".join(str(p["port"]) for p in ports) if ports else "none"
+        ))
+        ok, err = post_discovered_ports(api_url, api_key, ports)
+        if ok:
+            print("Reported to server successfully.")
+        else:
+            log_write("ERROR", "Failed to report ports: {}".format(err))
         sys.exit(0 if ok else 1)
 
     config_lock = FileLock(_CONFIG_LOCK_FILE, timeout=30)

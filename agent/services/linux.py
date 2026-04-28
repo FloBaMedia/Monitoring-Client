@@ -412,6 +412,28 @@ def _read_pending_updates():
         return None, None, None
 
 
+def read_listening_ports():
+    """Return sorted list of listening TCP ports via /proc/net/tcp[6]."""
+    ports = set()
+    for path in ["/proc/net/tcp", "/proc/net/tcp6"]:
+        try:
+            with open(path, "r") as f:
+                lines = f.readlines()
+            for line in lines[1:]:
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                if parts[3] != "0A":  # 0A = LISTEN
+                    continue
+                port_hex = parts[1].split(":")[-1]
+                port = int(port_hex, 16)
+                if 0 < port <= 65535:
+                    ports.add(port)
+        except Exception:
+            pass
+    return [{"port": p, "protocol": "TCP"} for p in sorted(ports)]
+
+
 def collect_linux_metrics():
     from models.constants import AGENT_VERSION
 
