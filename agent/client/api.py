@@ -92,7 +92,13 @@ def post_metrics(api_url, api_key, metrics, log_debug_fn=None):
 
 
 def get_config(api_url, api_key, log_debug_fn=None):
-    return _request("GET", api_url, "api/v1/agent/config", api_key, timeout=API_GET_TIMEOUT, log_debug_fn=log_debug_fn)
+    ok, result, err = _request("GET", api_url, "api/v1/agent/config", api_key, timeout=API_GET_TIMEOUT, log_debug_fn=log_debug_fn)
+    if not ok:
+        return False, None, []
+    data = result.get("data", {}) if isinstance(result, dict) else {}
+    config = data.get("config") if isinstance(data, dict) else None
+    services = data.get("services", []) if isinstance(data, dict) else []
+    return True, config, services
 
 
 def apply_template(api_url, api_key, template_id, server_id, log_debug_fn=None):

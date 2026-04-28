@@ -15,6 +15,7 @@ Usage:
 import json
 import os
 import platform
+import socket
 import subprocess
 import sys
 
@@ -32,16 +33,35 @@ def _load_config_state():
     try:
         with open(_CONFIG_STATE_FILE, "r", encoding=STATE_ENCODING) as f:
             data = json.load(f)
-        return data.get("configChangedAt"), data.get("config", {})
+        return data.get("configChangedAt"), data.get("config", {}), data.get("services", [])
     except Exception:
-        return None, {}
+        return None, {}, []
 
 
-def _save_config_state(config_changed_at, config_dict):
+def _save_config_state(config_changed_at, config_dict, services=None):
     try:
-        atomic_write(_CONFIG_STATE_FILE, json.dumps({"configChangedAt": config_changed_at, "config": config_dict}), encoding=STATE_ENCODING)
+        atomic_write(_CONFIG_STATE_FILE, json.dumps({
+            "configChangedAt": config_changed_at,
+            "config": config_dict,
+            "services": services or [],
+        }), encoding=STATE_ENCODING)
     except Exception as e:
         log_write("WARNING", "config_state: could not write state file: {}".format(e))
+
+
+def _check_service_port(port, protocol=None, timeout=3):
+    """TCP connect check. Returns ("up", None) or ("down", error_string)."""
+    if protocol and protocol.upper() == "UDP":
+        return "up", None  # UDP unreliable without app-level protocol
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return "up", None
+    except socket.timeout:
+        return "down", "Connection timed out"
+    except ConnectionRefusedError:
+        return "down", "Connection refused"
+    except OSError as e:
+        return "down", str(e)
 
 
 def parse_args():
@@ -209,7 +229,7 @@ def main():
         log_write("WARNING", "Config state locked by another process, skipping config update")
         no_apply_config = True
 
-    stored_changed_at, remote_config = (None, {}) if (dry_run or no_apply_config) else _load_config_state()
+    stored_changed_at, remote_config, stored_services = (None, {}, []) if (dry_run or no_apply_config) else _load_config_state()
 
     if not no_apply_config:
         config_lock.release()
@@ -226,6 +246,22 @@ def main():
         metrics = collect_linux_metrics()
 
     log_debug("Metrics collected successfully", debug_flag=DEBUG)
+
+    # Check service ports from last-known config
+    if stored_services and not dry_run and not check:
+        service_statuses = []
+        for svc in stored_services:
+            port = svc.get("port")
+            if not port:
+                continue
+            protocol = svc.get("protocol") or "TCP"
+            status, error = _check_service_port(int(port), protocol)
+            entry = {"serviceId": svc["id"], "status": status}
+            if error:
+                entry["error"] = error
+            service_statuses.append(entry)
+        if service_statuses:
+            metrics["serviceStatuses"] = service_statuses
 
     if check:
         _print_check(metrics)
@@ -249,13 +285,14 @@ def main():
         else:
             log_debug("Config changed on server — re-fetching", debug_flag=DEBUG)
 
-        config_ok, fetched_config = get_config(
+        config_ok, fetched_config, fetched_services = get_config(
             api_url, api_key, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
         )
         if config_ok and fetched_config:
             apply_config(fetched_config, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
             remote_config = fetched_config
-            _save_config_state(config_changed_at, remote_config)
+            stored_services = fetched_services
+            _save_config_state(config_changed_at, remote_config, fetched_services)
         else:
             log_debug("Could not fetch config from server", debug_flag=DEBUG)
 
