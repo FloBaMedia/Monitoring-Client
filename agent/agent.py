@@ -51,8 +51,6 @@ def _save_config_state(config_changed_at, config_dict, services=None):
 
 def _check_service_port(port, protocol=None, timeout=3):
     """TCP connect check. Returns ("up", None) or ("down", error_string)."""
-    if protocol and protocol.upper() == "UDP":
-        return "up", None  # UDP unreliable without app-level protocol
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=timeout):
             return "up", None
@@ -254,7 +252,9 @@ def main():
             port = svc.get("port")
             if not port:
                 continue
-            protocol = svc.get("protocol") or "TCP"
+            protocol = (svc.get("protocol") or "TCP").upper()
+            if protocol == "UDP":
+                continue  # UDP requires app-level probing; skip silently
             status, error = _check_service_port(int(port), protocol)
             entry = {"serviceId": svc["id"], "status": status}
             if error:
