@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-ServerPulse Agent v1.0.0
-Module-based Python 3.6+ monitoring agent. No external dependencies.
-Usage:
-  python agent.py                          # normal run (reads config, POSTs metrics)
-  python agent.py --dry-run                # print collected metrics as JSON, no HTTP
-  python agent.py --config /path/to.conf  # override config file path
-  python agent.py --apply-template <id>                    # fetch and execute a server template
-  python agent.py --apply-template <id> --schedule "0 3 * * *"  # schedule template via cron
-  python agent.py --apply-template <id> --schedule remove        # remove scheduled cron entry
-  python agent.py --no-apply-config       # skip fetching and applying remote config
-"""
+"""ServerPulse Agent — run with -h or --help for usage."""
 
 import json
 import os
@@ -62,9 +51,34 @@ def _check_service_port(port, protocol=None, timeout=3):
         return "down", str(e)
 
 
+HELP_TEXT = """\
+ServerPulse Agent {version}
+
+Usage: python3 agent.py [OPTIONS]
+
+Options:
+  (none)                          Send metrics once and exit
+  --check                         Collect and display metrics locally, no upload
+  --dry-run                       Collect metrics, print JSON — no HTTP request
+  --discover-ports                Scan all listening TCP ports and report to server
+  --apply-template <id>           Fetch and execute a config template by ID
+    --schedule <cron|remove>      Schedule or remove the template as a cron job
+  --config <path>                 Path to config file (default: /etc/serverpulse/config.ini)
+  --no-apply-config               Skip fetching and applying remote config changes
+  --debug                         Enable verbose debug logging
+  -h, --help                      Show this help message
+"""
+
+
 def parse_args():
     """Minimal arg parsing without argparse."""
     args = sys.argv[1:]
+
+    if "-h" in args or "--help" in args:
+        from models.constants import AGENT_VERSION
+        print(HELP_TEXT.format(version=AGENT_VERSION))
+        sys.exit(0)
+
     dry_run = "--dry-run" in args
     check = "--check" in args
     debug = "--debug" in args
