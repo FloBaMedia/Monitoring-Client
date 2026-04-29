@@ -58,6 +58,7 @@ Usage: python3 agent.py [OPTIONS]
 
 Options:
   (none)                          Send metrics once and exit
+  --info                          Show agent version and configuration info
   --check                         Collect and display metrics locally, no upload
   --dry-run                       Collect metrics, print JSON — no HTTP request
   --discover-ports                Scan all listening TCP ports and report to server
@@ -75,10 +76,10 @@ def parse_args():
     args = sys.argv[1:]
 
     if "-h" in args or "--help" in args:
-        from models.constants import AGENT_VERSION
         print(HELP_TEXT.format(version=AGENT_VERSION))
         sys.exit(0)
 
+    info = "--info" in args
     dry_run = "--dry-run" in args
     check = "--check" in args
     debug = "--debug" in args
@@ -99,7 +100,7 @@ def parse_args():
         idx = args.index("--schedule")
         if idx + 1 < len(args):
             schedule = args[idx + 1]
-    return dry_run, check, debug, config_path, template_id, schedule, no_apply_config, discover_ports
+    return info, dry_run, check, debug, config_path, template_id, schedule, no_apply_config, discover_ports
 
 
 def _print_check(metrics):
@@ -201,10 +202,25 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
 
 
 def main():
-    dry_run, check, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
+    info, dry_run, check, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
     DEBUG = cli_debug
 
     values, conf_path = load_config(config_override)
+
+    if info:
+        api_url = values.get("api_url", DEFAULT_API_URL)
+        server_id = values.get("server_id", "(not configured)")
+        print("ServerPulse Agent")
+        print("  Version:    {}".format(AGENT_VERSION))
+        print("  Python:     {}".format(platform.python_version()))
+        print("  Platform:   {} {} ({})".format(
+            platform.system(), platform.release(), platform.machine()
+        ))
+        print("  Hostname:   {}".format(platform.node()))
+        print("  Config:     {}".format(conf_path))
+        print("  API URL:    {}".format(api_url))
+        print("  Server ID:  {}".format(server_id))
+        sys.exit(0)
 
     if values.get("debug"):
         DEBUG = True
