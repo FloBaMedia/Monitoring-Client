@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     ServerPulse Agent Installer for Windows
@@ -56,9 +55,37 @@ function Write-Info  { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Gr
 function Write-Warn  { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
 function Write-Err   { param($msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
 
+# Pause before exiting so the user can read the output, but only when running
+# in a window that was opened just for this script (i.e. not in an existing terminal).
+function Exit-Script {
+    param([int]$Code = 0)
+    # $IsNewWindow is true when the process was launched without an existing console
+    # (double-click, Run dialog, Scheduled Task, etc.)
+    $IsNewWindow = ($Host.Name -eq 'ConsoleHost') -and
+                   ([System.Diagnostics.Process]::GetCurrentProcess().MainWindowHandle -ne [IntPtr]::Zero) -and
+                   ($null -eq $env:WT_SESSION) -and           # not Windows Terminal
+                   ($null -eq $env:TERM_PROGRAM)              # not VS Code / other terminals
+    if ($IsNewWindow -or $Code -ne 0) {
+        Write-Host ""
+        Write-Host "Press Enter to close this window..." -ForegroundColor DarkGray
+        $null = Read-Host
+    }
+    exit $Code
+}
+
 Write-Host ""
 Write-Host "ServerPulse Agent Installer for Windows" -ForegroundColor Cyan
 Write-Host "─────────────────────────────────────────────"
+
+# ── 0. Admin check ────────────────────────────────────────────────────────────
+$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Err "This installer must be run as Administrator."
+    Write-Host ""
+    Write-Host "Please right-click PowerShell and choose 'Run as Administrator'," -ForegroundColor White
+    Write-Host "then re-run this script." -ForegroundColor White
+    Exit-Script 1
+}
 
 # ── 1. Find Python ────────────────────────────────────────────────────────────
 Write-Info "Looking for Python 3.6+..."
@@ -80,7 +107,9 @@ foreach ($cmd in $candidates) {
 if (-not $PythonExe) {
     Write-Err "Python 3.6+ not found."
     Write-Err "Download from https://www.python.org/downloads/ and re-run this installer."
-    exit 1
+    Write-Host ""
+    Write-Host "Tip: When installing Python, tick 'Add Python to PATH'." -ForegroundColor White
+    Exit-Script 1
 }
 
 # ── 2. Create install directory ───────────────────────────────────────────────
@@ -100,7 +129,9 @@ try {
     Write-Info "Agent files downloaded to $InstallDir"
 } catch {
     Write-Err "Download failed: $_"
-    exit 1
+    Write-Host ""
+    Write-Host "Check your internet connection and try again." -ForegroundColor White
+    Exit-Script 1
 }
 
 # ── 4. Config (params / env vars or interactive) ──────────────────────────────
@@ -234,3 +265,5 @@ Write-Host ""
 Write-Host "To view the Scheduled Task:" -ForegroundColor White
 Write-Host "  Get-ScheduledTask -TaskName '$TaskName'" -ForegroundColor Gray
 Write-Host ""
+
+Exit-Script 0
