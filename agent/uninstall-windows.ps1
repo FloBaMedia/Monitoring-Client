@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     ServerPulse Agent Uninstaller for Windows
@@ -20,18 +19,43 @@ function Confirm-Action {
     return $ans -match "^[yY]$"
 }
 
+function Exit-Script {
+    param([int]$Code = 0)
+    $IsNewWindow = ($Host.Name -eq 'ConsoleHost') -and
+                   ([System.Diagnostics.Process]::GetCurrentProcess().MainWindowHandle -ne [IntPtr]::Zero) -and
+                   ($null -eq $env:WT_SESSION) -and
+                   ($null -eq $env:TERM_PROGRAM)
+    if ($IsNewWindow -or $Code -ne 0) {
+        Write-Host ""
+        Write-Host "Press Enter to close this window..." -ForegroundColor DarkGray
+        $null = Read-Host
+    }
+    exit $Code
+}
+
+# ── Admin check ───────────────────────────────────────────────────────────────
+$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host ""
+    Write-Host "[ERROR] This uninstaller must be run as Administrator." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Please right-click PowerShell and choose 'Run as Administrator'," -ForegroundColor White
+    Write-Host "then re-run this script." -ForegroundColor White
+    Exit-Script 1
+}
+
 Write-Host ""
 Write-Host "ServerPulse Agent Uninstaller" -ForegroundColor Cyan
 Write-Host "─────────────────────────────────────────────"
 Write-Host ""
 Write-Host "This will remove:"
-Write-Host "  • Scheduled Task '$TaskName'"
-Write-Host "  • All files in $InstallDir"
+Write-Host "  * Scheduled Task '$TaskName'"
+Write-Host "  * All files in $InstallDir"
 Write-Host ""
 
 if (-not (Confirm-Action "Continue with uninstallation?")) {
     Write-Host "Aborted."
-    exit 0
+    Exit-Script 0
 }
 Write-Host ""
 
@@ -46,7 +70,6 @@ if ($task) {
 
 # ── 2. Remove install directory ───────────────────────────────────────────────
 if (Test-Path $InstallDir) {
-    # Offer to keep or delete the log file separately
     $logPath = "$InstallDir\agent.log"
     $hasLog  = Test-Path $logPath
 
@@ -56,7 +79,6 @@ if (Test-Path $InstallDir) {
             Remove-Item -Recurse -Force $InstallDir
             Write-Info "Removed $InstallDir (including log)."
         } else {
-            # Remove everything except the log
             Get-ChildItem $InstallDir -Exclude "agent.log","agent.log.1" | Remove-Item -Recurse -Force
             Write-Info "Removed agent files. Log kept at $logPath"
         }
@@ -71,3 +93,5 @@ if (Test-Path $InstallDir) {
 Write-Host ""
 Write-Info "ServerPulse Agent has been uninstalled."
 Write-Host ""
+
+Exit-Script 0

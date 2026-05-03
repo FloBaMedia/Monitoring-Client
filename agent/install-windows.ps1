@@ -94,10 +94,17 @@ $PythonExe = $null
 $candidates = @("python", "python3", "py")
 foreach ($cmd in $candidates) {
     try {
+        $resolved = (Get-Command $cmd -ErrorAction SilentlyContinue).Source
+        # Skip Microsoft Store stub (opens Store dialog, not a real Python)
+        if ($resolved -and $resolved -match "WindowsApps") {
+            Write-Warn "Skipping Microsoft Store Python stub at $resolved"
+            Write-Warn "Install a real Python from https://www.python.org/downloads/ instead."
+            continue
+        }
         $ver = & $cmd -c "import sys; v=sys.version_info; print('{}.{}'.format(v.major,v.minor))" 2>$null
         $ok  = & $cmd -c "import sys; sys.exit(0 if sys.version_info>=(3,6) else 1)" 2>$null
         if ($LASTEXITCODE -eq 0) {
-            $PythonExe = (Get-Command $cmd -ErrorAction SilentlyContinue).Source
+            $PythonExe = $resolved
             Write-Info "Found Python $ver at $PythonExe"
             break
         }
@@ -193,6 +200,16 @@ try {
 } catch {
     Write-Warn "Could not restrict config permissions: $_"
     Write-Info "Config written to $ConfPath"
+}
+
+# ── 5b. Connectivity check ────────────────────────────────────────────────────
+Write-Info "Checking connectivity to $ApiUrl ..."
+try {
+    $response = Invoke-WebRequest -Uri "$ApiUrl/health" -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+    Write-Info "API reachable (HTTP $($response.StatusCode))."
+} catch {
+    Write-Warn "Could not reach $ApiUrl/health — $_"
+    Write-Warn "The agent will be installed anyway but won't report until the API is reachable."
 }
 
 # ── 6. Register Scheduled Task ────────────────────────────────────────────────
