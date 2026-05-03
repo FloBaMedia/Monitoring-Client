@@ -33,6 +33,7 @@ _MODULE_FILES = [
     "services/linux.py",
     "services/darwin.py",
     "services/windows.py",
+    "services/updater.py",
     "utils/__init__.py",
     "utils/config.py",
     "utils/logging.py",
