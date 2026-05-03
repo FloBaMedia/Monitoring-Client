@@ -125,9 +125,10 @@ def _write_last_check_ts():
 
 def _fetch_remote_version(log_fn=None):
     """Fetch AGENT_VERSION from models/constants.py on GitHub."""
+    url = "{}?t={}".format(GITHUB_VERSION_URL, int(time.time()))
     if log_fn:
         log_fn("Fetching remote version from {}".format(GITHUB_VERSION_URL))
-    ok, content = _fetch(GITHUB_VERSION_URL)
+    ok, content = _fetch(url)
     if not ok or not content:
         return None
     return _parse_version(content)
