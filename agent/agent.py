@@ -168,6 +168,26 @@ def parse_args():
         idx = args.index("--schedule")
         if idx + 1 < len(args):
             schedule = args[idx + 1]
+
+    _KNOWN_FLAGS = {
+        "--info", "--dry-run", "--check", "--check-update", "--update",
+        "--debug", "--no-apply-config", "--discover-ports",
+        "--config", "--apply-template", "--schedule", "-h", "--help",
+    }
+    _VALUE_FLAGS = {"--config", "--apply-template", "--schedule"}
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in _VALUE_FLAGS:
+            skip_next = True
+            continue
+        if arg.startswith("-") and arg not in _KNOWN_FLAGS:
+            print("Unknown option: {}\n".format(arg))
+            print(HELP_TEXT.format(version=AGENT_VERSION))
+            sys.exit(1)
+
     return info, dry_run, check, check_update, force_update, debug, config_path, template_id, schedule, no_apply_config, discover_ports
 
 

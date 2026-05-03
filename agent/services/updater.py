@@ -20,6 +20,7 @@ from utils.logging import log_write
 
 GITHUB_BASE_URL = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
 GITHUB_RAW_URL = GITHUB_BASE_URL + "/agent.py"
+GITHUB_VERSION_URL = GITHUB_BASE_URL + "/models/constants.py"
 UPDATE_CHECK_INTERVAL = 3600
 
 _MODULE_FILES = [
@@ -122,20 +123,23 @@ def _write_last_check_ts():
         log_write("WARNING", "Auto-update: could not write state file: {}".format(e))
 
 
+def _fetch_remote_version(log_fn=None):
+    """Fetch AGENT_VERSION from models/constants.py on GitHub."""
+    if log_fn:
+        log_fn("Fetching remote version from {}".format(GITHUB_VERSION_URL))
+    ok, content = _fetch(GITHUB_VERSION_URL)
+    if not ok or not content:
+        return None
+    return _parse_version(content)
+
+
 def check_version(log_debug_fn=None):
     """Fetch remote version and print comparison. No writes, no update."""
     print("Checking for updates...")
-    if log_debug_fn:
-        log_debug_fn("check_version: fetching {}".format(GITHUB_RAW_URL))
 
-    ok, remote_content = _fetch(GITHUB_RAW_URL)
-    if not ok or not remote_content:
-        print("ERROR: Could not reach GitHub to check for updates.")
-        return False
-
-    remote_version = _parse_version(remote_content)
+    remote_version = _fetch_remote_version(log_fn=log_debug_fn)
     if not remote_version:
-        print("ERROR: Could not parse version from remote file.")
+        print("ERROR: Could not reach GitHub or parse remote version.")
         return False
 
     print("  Installed : v{}".format(AGENT_VERSION))
@@ -169,17 +173,15 @@ def check_and_update(log_debug_fn=None, force=False):
     try:
         _write_last_check_ts()
 
-        if log_debug_fn:
-            log_debug_fn("Auto-update: checking {} for latest version".format(GITHUB_RAW_URL))
-
-        ok, remote_content = _fetch(GITHUB_RAW_URL)
-        if not ok or not remote_content:
-            log_write("WARNING", "Auto-update: could not reach GitHub – skipping")
+        remote_version = _fetch_remote_version(log_fn=log_debug_fn)
+        if not remote_version:
+            log_write("WARNING", "Auto-update: could not reach GitHub or parse version – skipping")
             return "skipped"
 
-        remote_version = _parse_version(remote_content)
-        if not remote_version:
-            log_write("WARNING", "Auto-update: could not parse version from remote file – skipping")
+        # Fetch agent.py separately for syntax validation and file update
+        ok, remote_content = _fetch(GITHUB_RAW_URL)
+        if not ok or not remote_content:
+            log_write("WARNING", "Auto-update: could not fetch agent.py – skipping")
             return "skipped"
 
         if log_debug_fn:
