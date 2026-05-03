@@ -133,6 +133,51 @@ def _fetch_remote_version(log_fn=None):
     return _parse_version(content)
 
 
+def update_status(auto_updates_enabled=None):
+    """Print auto-update schedule status. No network requests."""
+    import datetime
+
+    last_ts = _read_last_check_ts()
+    now = time.time()
+
+    print("Auto-Update Status")
+    print("  Version         : v{}".format(AGENT_VERSION))
+
+    if auto_updates_enabled is not None:
+        print("  Auto-updates    : {}".format("enabled" if auto_updates_enabled else "disabled"))
+
+    if last_ts == 0.0:
+        print("  Last check      : never")
+        print("  Next check      : on next metric report")
+    else:
+        elapsed = now - last_ts
+        remaining = max(0.0, UPDATE_CHECK_INTERVAL - elapsed)
+        last_dt = datetime.datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M:%S")
+        if elapsed < 60:
+            elapsed_str = "{:.0f}s ago".format(elapsed)
+        elif elapsed < 3600:
+            elapsed_str = "{:.0f} min ago".format(elapsed / 60)
+        else:
+            elapsed_str = "{:.1f}h ago".format(elapsed / 3600)
+
+        if remaining == 0:
+            next_str = "overdue (will run on next metric report)"
+        elif remaining < 60:
+            next_str = "in {:.0f}s".format(remaining)
+        elif remaining < 3600:
+            next_str = "in {:.0f} min".format(remaining / 60)
+        else:
+            next_str = "in {:.1f}h".format(remaining / 3600)
+
+        print("  Last check      : {} ({})".format(last_dt, elapsed_str))
+        print("  Next check      : {}".format(next_str))
+
+    print("  Check interval  : {}h".format(UPDATE_CHECK_INTERVAL // 3600))
+    print("")
+    print("  --check-update   check latest version without updating")
+    print("  --update         force an immediate update now")
+
+
 def check_version(log_debug_fn=None):
     """Fetch remote version and print comparison. No writes, no update."""
     print("Checking for updates...")

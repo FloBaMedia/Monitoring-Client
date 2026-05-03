@@ -127,6 +127,7 @@ Options:
   --dry-run                       Collect metrics, print JSON — no HTTP request
   --check-update                  Check if a newer agent version is available
   --update                        Download and apply the latest agent version now
+  --update-status                 Show auto-update schedule (last check, next check)
   --discover-ports                Scan all listening TCP ports and report to server
   --apply-template <id>           Fetch and execute a config template by ID
     --schedule <cron|remove>      Schedule or remove the template as a cron job
@@ -150,6 +151,7 @@ def parse_args():
     check = "--check" in args
     check_update = "--check-update" in args
     force_update = "--update" in args
+    update_status = "--update-status" in args
     debug = "--debug" in args
     no_apply_config = "--no-apply-config" in args
     discover_ports = "--discover-ports" in args
@@ -170,7 +172,7 @@ def parse_args():
             schedule = args[idx + 1]
 
     _KNOWN_FLAGS = {
-        "--info", "--dry-run", "--check", "--check-update", "--update",
+        "--info", "--dry-run", "--check", "--check-update", "--update", "--update-status",
         "--debug", "--no-apply-config", "--discover-ports",
         "--config", "--apply-template", "--schedule", "-h", "--help",
     }
@@ -188,7 +190,7 @@ def parse_args():
             print(HELP_TEXT.format(version=AGENT_VERSION))
             sys.exit(1)
 
-    return info, dry_run, check, check_update, force_update, debug, config_path, template_id, schedule, no_apply_config, discover_ports
+    return info, dry_run, check, check_update, force_update, update_status, debug, config_path, template_id, schedule, no_apply_config, discover_ports
 
 
 def _print_check(metrics):
@@ -290,7 +292,7 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
 
 
 def main():
-    info, dry_run, check, check_update, force_update, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
+    info, dry_run, check, check_update, force_update, show_update_status, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
     DEBUG = cli_debug
 
     values, conf_path = load_config(config_override)
@@ -308,6 +310,16 @@ def main():
         print("  Config:     {}".format(conf_path))
         print("  API URL:    {}".format(api_url))
         print("  Server ID:  {}".format(server_id))
+        sys.exit(0)
+
+    if show_update_status:
+        try:
+            from services.updater import update_status
+        except ImportError:
+            print("ERROR: services/updater.py is missing. Run with --update to bootstrap.")
+            sys.exit(1)
+        auto_updates = values.get("enable_auto_updates")
+        update_status(auto_updates_enabled=auto_updates if auto_updates is not None else None)
         sys.exit(0)
 
     if check_update or force_update:
