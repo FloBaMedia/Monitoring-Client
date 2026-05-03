@@ -1,4 +1,4 @@
-AGENT_VERSION = "1.2.0"
+AGENT_VERSION = "1.3.0"
 LOG_MAX_BYTES = 1_048_576  # 1 MB
 DEFAULT_API_URL = "https://sp-api.floba-media.de"
 

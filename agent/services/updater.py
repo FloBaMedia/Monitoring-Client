@@ -122,9 +122,36 @@ def _write_last_check_ts():
         log_write("WARNING", "Auto-update: could not write state file: {}".format(e))
 
 
-def check_and_update(log_debug_fn=None):
+def check_version(log_debug_fn=None):
+    """Fetch remote version and print comparison. No writes, no update."""
+    print("Checking for updates...")
+    if log_debug_fn:
+        log_debug_fn("check_version: fetching {}".format(GITHUB_RAW_URL))
+
+    ok, remote_content = _fetch(GITHUB_RAW_URL)
+    if not ok or not remote_content:
+        print("ERROR: Could not reach GitHub to check for updates.")
+        return False
+
+    remote_version = _parse_version(remote_content)
+    if not remote_version:
+        print("ERROR: Could not parse version from remote file.")
+        return False
+
+    print("  Installed : v{}".format(AGENT_VERSION))
+    print("  Available : v{}".format(remote_version))
+
+    if _version_tuple(remote_version) <= _version_tuple(AGENT_VERSION):
+        print("  Status    : Up to date")
+    else:
+        print("  Status    : Update available (run with --update to apply)")
+
+    return True
+
+
+def check_and_update(log_debug_fn=None, force=False):
     elapsed = time.time() - _read_last_check_ts()
-    if elapsed < UPDATE_CHECK_INTERVAL:
+    if not force and elapsed < UPDATE_CHECK_INTERVAL:
         if log_debug_fn:
             log_debug_fn(
                 "Auto-update: skipping check ({:.0f}s / {}s since last check)".format(

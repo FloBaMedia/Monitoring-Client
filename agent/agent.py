@@ -61,6 +61,8 @@ Options:
   --info                          Show agent version and configuration info
   --check                         Collect and display metrics locally, no upload
   --dry-run                       Collect metrics, print JSON — no HTTP request
+  --check-update                  Check if a newer agent version is available
+  --update                        Download and apply the latest agent version now
   --discover-ports                Scan all listening TCP ports and report to server
   --apply-template <id>           Fetch and execute a config template by ID
     --schedule <cron|remove>      Schedule or remove the template as a cron job
@@ -82,6 +84,8 @@ def parse_args():
     info = "--info" in args
     dry_run = "--dry-run" in args
     check = "--check" in args
+    check_update = "--check-update" in args
+    force_update = "--update" in args
     debug = "--debug" in args
     no_apply_config = "--no-apply-config" in args
     discover_ports = "--discover-ports" in args
@@ -100,7 +104,7 @@ def parse_args():
         idx = args.index("--schedule")
         if idx + 1 < len(args):
             schedule = args[idx + 1]
-    return info, dry_run, check, debug, config_path, template_id, schedule, no_apply_config, discover_ports
+    return info, dry_run, check, check_update, force_update, debug, config_path, template_id, schedule, no_apply_config, discover_ports
 
 
 def _print_check(metrics):
@@ -202,7 +206,7 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
 
 
 def main():
-    info, dry_run, check, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
+    info, dry_run, check, check_update, force_update, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
     DEBUG = cli_debug
 
     values, conf_path = load_config(config_override)
@@ -221,6 +225,28 @@ def main():
         print("  API URL:    {}".format(api_url))
         print("  Server ID:  {}".format(server_id))
         sys.exit(0)
+
+    if check_update:
+        from services.updater import check_version
+        ok = check_version(log_debug_fn=lambda msg: log_debug(msg, debug_flag=cli_debug) if cli_debug else None)
+        sys.exit(0 if ok else 1)
+
+    if force_update:
+        from services.updater import check_and_update
+        print("Checking for updates (forced)...")
+        result = check_and_update(
+            force=True,
+            log_debug_fn=lambda msg: log_debug(msg, debug_flag=cli_debug) if cli_debug else None,
+        )
+        if result == "updated":
+            print("Agent updated successfully. Restart the agent to use the new version.")
+            sys.exit(0)
+        elif result == "up_to_date":
+            print("Agent is already up to date.")
+            sys.exit(0)
+        else:
+            print("Update failed or was skipped. Check logs for details.")
+            sys.exit(1)
 
     if values.get("debug"):
         DEBUG = True
