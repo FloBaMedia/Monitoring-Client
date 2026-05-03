@@ -226,13 +226,21 @@ def main():
         print("  Server ID:  {}".format(server_id))
         sys.exit(0)
 
-    if check_update:
-        from services.updater import check_version
-        ok = check_version(log_debug_fn=lambda msg: log_debug(msg, debug_flag=cli_debug) if cli_debug else None)
-        sys.exit(0 if ok else 1)
+    if check_update or force_update:
+        try:
+            from services.updater import check_and_update, check_version
+        except ImportError:
+            print(
+                "ERROR: services/updater.py is missing. Run:\n"
+                "  curl -o /etc/serverpulse/services/updater.py "
+                "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/services/updater.py"
+            )
+            sys.exit(1)
 
-    if force_update:
-        from services.updater import check_and_update
+        if check_update:
+            ok = check_version(log_debug_fn=lambda msg: log_debug(msg, debug_flag=cli_debug) if cli_debug else None)
+            sys.exit(0 if ok else 1)
+
         print("Checking for updates (forced)...")
         result = check_and_update(
             force=True,
