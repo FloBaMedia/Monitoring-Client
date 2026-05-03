@@ -8,6 +8,70 @@ import socket
 import subprocess
 import sys
 
+
+def _bootstrap():
+    """Download any missing module files from GitHub before imports run."""
+    import ssl
+    import urllib.request
+
+    _BOOTSTRAP_BASE = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
+    _BOOTSTRAP_FILES = [
+        "client/__init__.py",
+        "client/api.py",
+        "models/__init__.py",
+        "models/constants.py",
+        "models/limits.py",
+        "services/__init__.py",
+        "services/config_applier.py",
+        "services/linux.py",
+        "services/darwin.py",
+        "services/windows.py",
+        "services/updater.py",
+        "utils/__init__.py",
+        "utils/config.py",
+        "utils/logging.py",
+        "utils/validation.py",
+        "utils/lock.py",
+        "utils/snapshot.py",
+    ]
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    missing = [
+        f for f in _BOOTSTRAP_FILES
+        if not os.path.isfile(os.path.join(script_dir, f.replace("/", os.sep)))
+    ]
+    if not missing:
+        return
+
+    print("Bootstrap: downloading {} missing module file(s)...".format(len(missing)))
+    ctx = ssl.create_default_context()
+    failed = []
+    for rel_path in missing:
+        url = _BOOTSTRAP_BASE + "/" + rel_path
+        dest = os.path.join(script_dir, rel_path.replace("/", os.sep))
+        dest_dir = os.path.dirname(dest)
+        if dest_dir and not os.path.isdir(dest_dir):
+            os.makedirs(dest_dir)
+        try:
+            with urllib.request.urlopen(url, timeout=15, context=ctx) as resp:
+                content = resp.read()
+            with open(dest, "wb") as f:
+                f.write(content)
+            print("  + {}".format(rel_path))
+        except Exception as e:
+            print("  ERROR: could not download {}: {}".format(rel_path, e))
+            failed.append(rel_path)
+
+    if failed:
+        print("Bootstrap failed for: {}".format(", ".join(failed)))
+        print("Please check your internet connection or install manually.")
+        sys.exit(1)
+
+    print("Bootstrap complete.\n")
+
+
+_bootstrap()
+
 from models.constants import AGENT_VERSION, DEFAULT_API_URL
 from models.limits import SCRIPT_EXEC_TIMEOUT, STATE_ENCODING
 from utils.config import ensure_config, load_config
