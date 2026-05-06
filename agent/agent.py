@@ -451,7 +451,7 @@ def main():
         sys.exit(0)
 
     from client.api import post_metrics
-    ok, config_changed_at = post_metrics(
+    ok, config_changed_at, commands = post_metrics(
         api_url, api_key, metrics, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
     )
 
@@ -478,6 +478,21 @@ def main():
     if ok and not no_apply_config and remote_config.get("enableAutoUpdates"):
         from services.updater import check_and_update
         check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+
+    if ok and "discover-ports" in commands:
+        if platform.system() != "Linux":
+            log_write("WARNING", "Server requested port scan but --discover-ports is Linux only — skipping")
+        else:
+            log_write("INFO", "Server requested port scan — running")
+            try:
+                from services.linux import read_listening_ports
+                from client.api import post_discovered_ports
+                _ports = read_listening_ports()
+                post_discovered_ports(api_url, api_key, _ports,
+                                      log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+                log_write("INFO", "Port scan complete — {} port(s) reported".format(len(_ports)))
+            except Exception as _e:
+                log_write("WARNING", "Server-requested port scan failed: {}".format(_e))
 
     sys.exit(0 if ok else 1)
 

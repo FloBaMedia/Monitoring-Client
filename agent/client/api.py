@@ -86,9 +86,11 @@ def _request(method, base_url, path, api_key, body=None, timeout=10, log_debug_f
 def post_metrics(api_url, api_key, metrics, log_debug_fn=None):
     ok, result, err = _request("POST", api_url, "api/v1/agent/metrics", api_key, metrics, timeout=API_POST_TIMEOUT, log_debug_fn=log_debug_fn)
     if not ok:
-        return False, None
-    config_changed_at = result.get("configChangedAt") if isinstance(result, dict) else None
-    return True, config_changed_at
+        return False, None, []
+    data = result.get("data", {}) if isinstance(result, dict) else {}
+    config_changed_at = data.get("configChangedAt") if isinstance(data, dict) else None
+    commands = data.get("commands", []) if isinstance(data, dict) else []
+    return True, config_changed_at, commands
 
 
 def get_config(api_url, api_key, log_debug_fn=None):
