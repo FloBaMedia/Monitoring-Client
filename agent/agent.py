@@ -128,6 +128,7 @@ Options:
   --check-update                  Check if a newer agent version is available
   --update                        Download and apply the latest agent version now
   --update-status                 Show auto-update schedule (last check, next check)
+  --config-status                 Show local config + last applied server config
   --discover-ports                Scan all listening TCP ports and report to server
   --apply-template <id>           Fetch and execute a config template by ID
     --schedule <cron|remove>      Schedule or remove the template as a cron job
@@ -147,6 +148,7 @@ def parse_args():
         sys.exit(0)
 
     info = "--info" in args
+    config_status = "--config-status" in args
     dry_run = "--dry-run" in args
     check = "--check" in args
     check_update = "--check-update" in args
@@ -172,8 +174,8 @@ def parse_args():
             schedule = args[idx + 1]
 
     _KNOWN_FLAGS = {
-        "--info", "--dry-run", "--check", "--check-update", "--update", "--update-status",
-        "--debug", "--no-apply-config", "--discover-ports",
+        "--info", "--config-status", "--dry-run", "--check", "--check-update", "--update",
+        "--update-status", "--debug", "--no-apply-config", "--discover-ports",
         "--config", "--apply-template", "--schedule", "-h", "--help",
     }
     _VALUE_FLAGS = {"--config", "--apply-template", "--schedule"}
@@ -190,7 +192,7 @@ def parse_args():
             print(HELP_TEXT.format(version=AGENT_VERSION))
             sys.exit(1)
 
-    return info, dry_run, check, check_update, force_update, update_status, debug, config_path, template_id, schedule, no_apply_config, discover_ports
+    return info, config_status, dry_run, check, check_update, force_update, update_status, debug, config_path, template_id, schedule, no_apply_config, discover_ports
 
 
 def _print_check(metrics):
@@ -292,7 +294,7 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
 
 
 def main():
-    info, dry_run, check, check_update, force_update, show_update_status, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
+    info, config_status, dry_run, check, check_update, force_update, show_update_status, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
     DEBUG = cli_debug
 
     values, conf_path = load_config(config_override)
@@ -310,6 +312,26 @@ def main():
         print("  Config:     {}".format(conf_path))
         print("  API URL:    {}".format(api_url))
         print("  Server ID:  {}".format(server_id))
+        sys.exit(0)
+
+    if config_status:
+        stored_changed_at, remote_config, stored_services = _load_config_state()
+        print("ServerPulse Agent — Config Status")
+        print("")
+        print("Local config ({})".format(conf_path or "env vars"))
+        print("  API URL:      {}".format(values.get("api_url", DEFAULT_API_URL)))
+        print("  Server ID:    {}".format(values.get("server_id", "(not set)")))
+        print("")
+        if remote_config:
+            print("Server config (last fetched: {})".format(stored_changed_at or "unknown"))
+            print("  Auto-updates: {}".format("enabled" if remote_config.get("enableAutoUpdates") else "disabled"))
+            print("  Report every: {}s".format(remote_config.get("reportIntervalSeconds", 60)))
+            print("  Timezone:     {}".format(remote_config.get("timezone") or "(not set)"))
+            print("  Locale:       {}".format(remote_config.get("locale") or "(not set)"))
+            if stored_services:
+                print("  Services:     {}".format(len(stored_services)))
+        else:
+            print("Server config: not yet fetched (run agent once to sync)")
         sys.exit(0)
 
     if show_update_status:
