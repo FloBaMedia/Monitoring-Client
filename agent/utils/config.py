@@ -100,10 +100,13 @@ def _save_config(path, values):
                 cfg.set("serverpulse", "debug", "true" if val else "false")
             else:
                 cfg.set("serverpulse", key, str(val))
-        with open(path, "w", encoding="utf-8") as f:
-            cfg.write(f)
-        if not platform.system() == "Windows":
-            os.chmod(path, 0o600)
+        if platform.system() != "Windows":
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                cfg.write(f)
+        else:
+            with open(path, "w", encoding="utf-8") as f:
+                cfg.write(f)
         log_debug("Config saved to {}".format(path))
     except Exception as e:
         from utils.logging import log_write

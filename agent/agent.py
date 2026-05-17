@@ -230,10 +230,13 @@ def _print_check(metrics):
 
 
 def execute_script(script_content, log_debug_fn=None):
+    import hashlib
+    script_hash = hashlib.sha256(script_content.encode("utf-8", errors="replace")).hexdigest()
+
     if log_debug_fn:
         log_debug_fn("Executing script ({} chars)".format(len(script_content)))
 
-    log_write("INFO", "Executing server setup script...")
+    log_write("INFO", "Executing server setup script (SHA256: {})".format(script_hash))
 
     is_windows = platform.system() == "Windows"
     if is_windows:
@@ -430,9 +433,6 @@ def main():
 
     stored_changed_at, remote_config, stored_services = (None, {}, []) if (dry_run or no_apply_config) else _load_config_state()
 
-    if not no_apply_config:
-        config_lock.release()
-
     _system = platform.system()
     if _system == "Windows":
         from services.windows import collect_windows_metrics
@@ -496,6 +496,9 @@ def main():
             _save_config_state(config_changed_at, remote_config, fetched_services)
         else:
             log_debug("Could not fetch config from server", debug_flag=DEBUG)
+
+    if not no_apply_config:
+        config_lock.release()
 
     if ok and not no_apply_config and remote_config.get("enableAutoUpdates"):
         from services.updater import check_and_update

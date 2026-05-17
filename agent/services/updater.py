@@ -217,17 +217,9 @@ def check_and_update(log_debug_fn=None, force=False):
         return "skipped"
 
     try:
-        _write_last_check_ts()
-
         remote_version = _fetch_remote_version(log_fn=log_debug_fn)
         if not remote_version:
             log_write("WARNING", "Auto-update: could not reach GitHub or parse version – skipping")
-            return "skipped"
-
-        # Fetch agent.py separately for syntax validation and file update
-        ok, remote_content = _fetch(GITHUB_RAW_URL)
-        if not ok or not remote_content:
-            log_write("WARNING", "Auto-update: could not fetch agent.py – skipping")
             return "skipped"
 
         if log_debug_fn:
@@ -237,6 +229,7 @@ def check_and_update(log_debug_fn=None, force=False):
 
         if _version_tuple(remote_version) <= _version_tuple(AGENT_VERSION):
             log_write("INFO", "Auto-update: already up to date (v{})".format(AGENT_VERSION))
+            _write_last_check_ts()
             return "up_to_date"
 
         log_write(
@@ -245,6 +238,13 @@ def check_and_update(log_debug_fn=None, force=False):
                 AGENT_VERSION, remote_version
             ),
         )
+
+        # Only fetch agent.py when an update is actually needed
+        ok, remote_content = _fetch(GITHUB_RAW_URL)
+        if not ok or not remote_content:
+            log_write("WARNING", "Auto-update: could not fetch agent.py – skipping")
+            # Don't write timestamp: transient failure, allow retry on next run
+            return "skipped"
 
         target_path = _installed_path()
         install_dir = os.path.dirname(target_path)
@@ -255,6 +255,7 @@ def check_and_update(log_debug_fn=None, force=False):
                 ast.parse(remote_content)
             except SyntaxError as e:
                 log_write("ERROR", "Auto-update: downloaded agent.py has syntax error – aborting: {}".format(e))
+                _write_last_check_ts()  # Permanent issue on GitHub side – don't hammer
                 return "skipped"
 
             if os.path.isfile(target_path):
@@ -270,6 +271,12 @@ def check_and_update(log_debug_fn=None, force=False):
                 if not ok:
                     log_write("WARNING", "Auto-update: could not fetch {} – skipping module".format(rel_path))
                     continue
+                if rel_path.endswith(".py"):
+                    try:
+                        ast.parse(mod_content)
+                    except SyntaxError as e:
+                        log_write("ERROR", "Auto-update: {} has syntax error – skipping: {}".format(rel_path, e))
+                        continue
                 mod_dest = os.path.join(install_dir, rel_path.replace("/", os.sep))
                 mod_dir = os.path.dirname(mod_dest)
                 if mod_dir and not os.path.isdir(mod_dir):
@@ -278,6 +285,7 @@ def check_and_update(log_debug_fn=None, force=False):
                 if log_debug_fn:
                     log_debug_fn("Auto-update: updated {}".format(rel_path))
 
+            _write_last_check_ts()
             log_write(
                 "INFO",
                 "Auto-update: successfully updated to v{} (backup: {})".format(
@@ -291,6 +299,7 @@ def check_and_update(log_debug_fn=None, force=False):
                 "WARNING",
                 "Auto-update: no write permission for {} – run agent as root/admin".format(target_path),
             )
+            _write_last_check_ts()  # Permanent issue – don't keep retrying every run
             return "skipped"
         except Exception as e:
             log_write("ERROR", "Auto-update: failed to write new version: {}".format(e))

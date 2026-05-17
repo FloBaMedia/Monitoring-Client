@@ -325,7 +325,7 @@ def schedule_template(template_id, cron_expr):
         log_write("WARNING", "Invalid cron expression: {}".format(cron_expr))
         return False
 
-    agent_path = os.path.abspath(sys.argv[0])
+    agent_path = os.path.realpath(sys.argv[0])
     marker = "{}{}".format(_TEMPLATE_CRON_MARKER, safe_id)
     cron_line = "{} python3 {} --apply-template {}  {}".format(
         cron_expr, agent_path, safe_id, marker
