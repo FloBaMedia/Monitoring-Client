@@ -110,9 +110,12 @@ def _read_state():
         with open(_state_path(), "r") as f:
             raw = f.read().strip()
         try:
-            return _json.loads(raw)
+            data = _json.loads(raw)
+            if isinstance(data, dict):
+                return data
+            # json.loads succeeded but returned a number (legacy plain-float format)
+            return {"ts": float(data), "remote_version": None}
         except Exception:
-            # Legacy: plain float timestamp
             return {"ts": float(raw), "remote_version": None}
     except Exception:
         return {"ts": 0.0, "remote_version": None}
