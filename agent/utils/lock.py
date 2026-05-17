@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import signal
+import subprocess
 import time
 
 from models.limits import LOCK_MAX_AGE_SECONDS, LOCK_RETRY_SECONDS, LOCK_RETRY_MAX
@@ -14,7 +15,6 @@ def _pid_alive(pid: int) -> bool:
         return False
     try:
         if platform.system() == "Windows":
-            import subprocess
             result = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}"],
                 capture_output=True,
