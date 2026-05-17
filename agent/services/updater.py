@@ -104,21 +104,41 @@ def _lock_path():
     return _LOCK_PATHS.get(platform.system(), os.path.join(os.path.dirname(_installed_path()), ".update.lock"))
 
 
-def _read_last_check_ts():
+def _read_state():
     try:
+        import json as _json
         with open(_state_path(), "r") as f:
-            return float(f.read().strip())
+            raw = f.read().strip()
+        try:
+            return _json.loads(raw)
+        except Exception:
+            # Legacy: plain float timestamp
+            return {"ts": float(raw), "remote_version": None}
     except Exception:
-        return 0.0
+        return {"ts": 0.0, "remote_version": None}
 
 
-def _write_last_check_ts():
+def _read_last_check_ts():
+    return _read_state().get("ts", 0.0)
+
+
+def _read_last_remote_version():
+    return _read_state().get("remote_version")
+
+
+def _write_last_check_ts(remote_version=None):
+    import json as _json
     try:
         dir_path = os.path.dirname(_state_path())
         if dir_path and not os.path.exists(dir_path):
             os.makedirs(dir_path)
+        existing = _read_state()
+        data = {
+            "ts": time.time(),
+            "remote_version": remote_version if remote_version is not None else existing.get("remote_version"),
+        }
         with open(_state_path(), "w") as f:
-            f.write(str(time.time()))
+            _json.dump(data, f)
     except Exception as e:
         log_write("WARNING", "Auto-update: could not write state file: {}".format(e))
 
@@ -139,10 +159,17 @@ def update_status(auto_updates_enabled=None):
     import datetime
 
     last_ts = _read_last_check_ts()
+    last_remote = _read_last_remote_version()
     now = time.time()
 
     print("Auto-Update Status")
     print("  Version         : v{}".format(AGENT_VERSION))
+    if last_remote and last_remote != AGENT_VERSION:
+        print("  Latest          : v{} (update available)".format(last_remote))
+    elif last_remote:
+        print("  Latest          : v{} (up to date)".format(last_remote))
+    else:
+        print("  Latest          : unknown (not yet checked)")
 
     if auto_updates_enabled is not None:
         print("  Auto-updates    : {}".format("enabled" if auto_updates_enabled else "disabled"))
@@ -229,7 +256,7 @@ def check_and_update(log_debug_fn=None, force=False):
 
         if _version_tuple(remote_version) <= _version_tuple(AGENT_VERSION):
             log_write("INFO", "Auto-update: already up to date (v{})".format(AGENT_VERSION))
-            _write_last_check_ts()
+            _write_last_check_ts(remote_version=remote_version)
             return "up_to_date"
 
         log_write(
@@ -255,7 +282,7 @@ def check_and_update(log_debug_fn=None, force=False):
                 ast.parse(remote_content)
             except SyntaxError as e:
                 log_write("ERROR", "Auto-update: downloaded agent.py has syntax error – aborting: {}".format(e))
-                _write_last_check_ts()  # Permanent issue on GitHub side – don't hammer
+                _write_last_check_ts(remote_version=remote_version)  # Permanent issue on GitHub side – don't hammer
                 return "skipped"
 
             if os.path.isfile(target_path):
@@ -285,7 +312,7 @@ def check_and_update(log_debug_fn=None, force=False):
                 if log_debug_fn:
                     log_debug_fn("Auto-update: updated {}".format(rel_path))
 
-            _write_last_check_ts()
+            _write_last_check_ts(remote_version=remote_version)
             log_write(
                 "INFO",
                 "Auto-update: successfully updated to v{} (backup: {})".format(
@@ -299,7 +326,7 @@ def check_and_update(log_debug_fn=None, force=False):
                 "WARNING",
                 "Auto-update: no write permission for {} – run agent as root/admin".format(target_path),
             )
-            _write_last_check_ts()  # Permanent issue – don't keep retrying every run
+            _write_last_check_ts(remote_version=remote_version)  # Permanent issue – don't keep retrying every run
             return "skipped"
         except Exception as e:
             log_write("ERROR", "Auto-update: failed to write new version: {}".format(e))
