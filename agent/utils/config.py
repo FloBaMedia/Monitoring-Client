@@ -9,8 +9,7 @@ import sys
 from models.constants import DEFAULT_API_URL
 
 REQUIRED_FIELDS = [
-    ("api_url", "API URL",              DEFAULT_API_URL, False),
-    ("api_key", "API Key (sp_live_...)", None,           True),
+    ("api_key", "API Key (sp_live_...)", None, True),
 ]
 
 
@@ -41,6 +40,7 @@ def load_config(override_path=None):
     (env vars) or '' (no file found).
 
     Priority: ENV vars > config files.
+    api_url is optional — when omitted, the agent uses DEFAULT_API_URL from constants.
     """
     from utils.logging import log_debug
 
@@ -69,15 +69,25 @@ def load_config(override_path=None):
             sec = "serverpulse"
             if cfg.has_section(sec):
                 for key, _, _, _ in REQUIRED_FIELDS:
-                    val = cfg.get(sec, key, fallback="").strip()
-                    if val:
-                        values[key] = val.rstrip("/") if key == "api_url" else val
-                values["debug"] = cfg.get(sec, "debug", fallback="false").strip().lower() in ("1", "true", "yes")
+                    if not values.get(key):
+                        val = cfg.get(sec, key, fallback="").strip()
+                        if val:
+                            values[key] = val
+                if not values.get("api_url"):
+                    api_url = cfg.get(sec, "api_url", fallback="").strip()
+                    if api_url:
+                        values["api_url"] = api_url.rstrip("/")
+                if "debug" not in values:
+                    values["debug"] = cfg.get(sec, "debug", fallback="false").strip().lower() in ("1", "true", "yes")
                 log_debug("Config loaded from {}".format(path))
                 return values, path
         except Exception as e:
             from utils.logging import log_write
             log_write("WARNING", "Could not read config {}: {}".format(path, e))
+
+    if values:
+        log_debug("Partial config from environment variables")
+        return values, None
 
     return values, ""
 
@@ -98,6 +108,9 @@ def _save_config(path, values):
         for key, val in values.items():
             if key == "debug":
                 cfg.set("serverpulse", "debug", "true" if val else "false")
+            elif key == "api_url" and not val:
+                if cfg.has_option("serverpulse", "api_url"):
+                    cfg.remove_option("serverpulse", "api_url")
             else:
                 cfg.set("serverpulse", key, str(val))
         if platform.system() != "Windows":
@@ -131,6 +144,9 @@ def ensure_config(values, conf_path, override_path=None):
     if not missing:
         return values
 
+    if conf_path is None and not missing:
+        return values
+
     if conf_path is None:
         log_write("ERROR", "Environment variables set but missing: {}".format(
             ", ".join(k for k, *_ in missing)))
@@ -141,7 +157,7 @@ def ensure_config(values, conf_path, override_path=None):
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     if not interactive:
         log_write("ERROR", "Config incomplete. Missing fields: {}. "
-                  "Add them to {} or set env vars.".format(
+                  "Add them to {} or set SERVERPULSE_API_KEY.".format(
                       ", ".join(k for k, *_ in missing), save_path))
         sys.exit(1)
 
@@ -151,6 +167,7 @@ def ensure_config(values, conf_path, override_path=None):
     else:
         print("No configuration found. Let's set it up now.")
         print("Config will be saved to: {}".format(save_path))
+        print("Default API URL: {}".format(DEFAULT_API_URL))
     print("")
 
     for key, label, default, secret in missing:
@@ -169,11 +186,12 @@ def ensure_config(values, conf_path, override_path=None):
                 sys.exit(1)
 
             if entered:
-                values[key] = entered.rstrip("/") if key == "api_url" else entered
+                values[key] = entered
                 break
             print("  ✗ This field is required.")
 
-    _save_config(save_path, values)
+    save_values = {k: v for k, v in values.items() if k != "api_url" or v}
+    _save_config(save_path, save_values)
     print("")
     print("  ✓ Config saved to {}".format(save_path))
     print("")

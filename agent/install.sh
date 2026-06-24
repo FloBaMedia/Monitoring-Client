@@ -8,7 +8,7 @@ INSTALL_DIR="/etc/serverpulse"
 AGENT_PATH="$INSTALL_DIR/agent.py"
 CONF_PATH="$INSTALL_DIR/agent.conf"
 CRON_MARKER="serverpulse/agent.py"
-DEFAULT_API_URL="https://sp-api.floba-media.de"
+DEFAULT_API_URL="https://api.servermetry.com"
 
 # All module files that must be present alongside agent.py
 MODULE_FILES=(
@@ -100,48 +100,25 @@ done
 info "Agent installed in $INSTALL_DIR"
 
 # ── 5. Config (env vars → existing config → interactive) ──────────────────────
-# Priority: env vars > existing agent.conf > interactive prompt with defaults.
-# Running the installer again acts as an update — existing values are offered
-# as defaults so the user only needs to press Enter to keep them.
+# api_url is optional — agent defaults to https://api.servermetry.com unless
+# SERVERPULSE_URL is set (override only).
 
-API_URL="${SERVERPULSE_URL:-}"
+API_URL_OVERRIDE="${SERVERPULSE_URL:-}"
+API_URL_OVERRIDE="${API_URL_OVERRIDE%/}"
 API_KEY="${SERVERPULSE_KEY:-}"
-API_URL="${API_URL%/}"
 
-# Read values from an existing config file (update / reinstall scenario)
-CONF_URL=""
 CONF_KEY=""
 if [[ -f "$CONF_PATH" ]]; then
-    CONF_URL=$(grep -E '^\s*api_url\s*=' "$CONF_PATH" 2>/dev/null \
-               | sed 's/.*=\s*//' | tr -d ' \r' || true)
     CONF_KEY=$(grep -E '^\s*api_key\s*=' "$CONF_PATH" 2>/dev/null \
                | sed 's/.*=\s*//' | tr -d ' \r' || true)
 fi
 
-if [[ -n "$API_URL" && -n "$API_KEY" ]]; then
-    info "Using API URL and API Key from environment variables."
+if [[ -n "$API_KEY" ]]; then
+    info "Using API Key from environment variables."
 else
-    [[ -n "$CONF_URL" || -n "$CONF_KEY" ]] && \
-        info "Existing config found – press Enter to keep current values."
+    [[ -n "$CONF_KEY" ]] && info "Existing config found – press Enter to keep current API Key."
     echo ""
-    echo "Please enter your ServerPulse configuration:"
-
-    # When piped through `curl | bash`, stdin is the pipe — redirect reads
-    # from /dev/tty so the user can still type interactively.
-    if [[ -z "$API_URL" ]]; then
-        URL_DEFAULT="${CONF_URL:-$DEFAULT_API_URL}"
-        while true; do
-            read -rp "  API URL [${URL_DEFAULT}]: " API_URL </dev/tty
-            API_URL="${API_URL%/}"
-            [[ -z "$API_URL" ]] && API_URL="$URL_DEFAULT"
-            if [[ "$API_URL" =~ ^https?:// ]]; then
-                break
-            fi
-            warn "URL must start with http:// or https://"
-        done
-    else
-        info "Using API URL from environment: $API_URL"
-    fi
+    echo "Please enter your ServerMetry API Key:"
 
     if [[ -z "$API_KEY" ]]; then
         if [[ -n "$CONF_KEY" ]]; then
@@ -159,17 +136,23 @@ else
                 warn "API key seems too short. Please try again."
             done
         fi
-    else
-        info "Using API Key from environment."
     fi
 fi
 
+if [[ -n "$API_URL_OVERRIDE" ]]; then
+    info "API URL override from environment: $API_URL_OVERRIDE"
+else
+    info "Using default API URL: $DEFAULT_API_URL"
+fi
+
 # ── 6. Write config ───────────────────────────────────────────────────────────
-cat > "$CONF_PATH" <<EOF
-[serverpulse]
-api_url = $API_URL
-api_key = $API_KEY
-EOF
+{
+    echo "[serverpulse]"
+    echo "api_key = $API_KEY"
+    if [[ -n "$API_URL_OVERRIDE" ]]; then
+        echo "api_url = $API_URL_OVERRIDE"
+    fi
+} > "$CONF_PATH"
 chmod 600 "$CONF_PATH"
 info "Config written to $CONF_PATH (mode 600)"
 

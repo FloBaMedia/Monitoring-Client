@@ -1,6 +1,6 @@
-AGENT_VERSION = "1.3.7"
+AGENT_VERSION = "1.3.8"
 LOG_MAX_BYTES = 1_048_576  # 1 MB
-DEFAULT_API_URL = "https://sp-api.floba-media.de"
+DEFAULT_API_URL = "https://api.servermetry.com"
 
 SKIP_FILESYSTEMS = {
     "tmpfs", "devtmpfs", "sysfs", "proc", "cgroup", "cgroup2",

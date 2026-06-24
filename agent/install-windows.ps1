@@ -21,6 +21,8 @@ param(
     [string]$ApiKey = $env:SERVERPULSE_KEY
 )
 
+$DefaultApiUrl = "https://api.servermetry.com"
+
 $ErrorActionPreference = "Stop"
 
 $InstallDir  = "C:\ProgramData\ServerPulse"
@@ -142,47 +144,43 @@ try {
 }
 
 # ── 4. Config (params / env vars or interactive) ──────────────────────────────
+# api_url is optional — agent defaults to https://api.servermetry.com unless
+# -ApiUrl / SERVERPULSE_URL is set (override only).
+
 $ApiUrl = $ApiUrl.TrimEnd("/")
 
-if ($ApiUrl -and $ApiKey) {
-    Write-Info "Using API URL and API Key from parameters / environment variables."
+if ($ApiKey) {
+    Write-Info "Using API Key from parameters / environment variables."
 } else {
     Write-Host ""
-    Write-Host "Please enter your ServerPulse configuration:" -ForegroundColor White
+    Write-Host "Please enter your ServerMetry API Key:" -ForegroundColor White
 
-    if (-not $ApiUrl) {
-        do {
-            $ApiUrl = Read-Host "  API URL (e.g. https://api.yourdomain.com)"
-            $ApiUrl = $ApiUrl.TrimEnd("/")
-            if (-not ($ApiUrl -match "^https?://")) {
-                Write-Warn "URL must start with http:// or https://"
-            }
-        } while (-not ($ApiUrl -match "^https?://"))
-    } else {
-        Write-Info "Using API URL from parameter: $ApiUrl"
-    }
+    do {
+        $ApiKeySecure = Read-Host "  API Key (sp_live_...)" -AsSecureString
+        $ApiKeyBSTR   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ApiKeySecure)
+        $ApiKey       = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($ApiKeyBSTR)
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ApiKeyBSTR)
+        if ($ApiKey.Length -lt 8) {
+            Write-Warn "API key seems too short. Please try again."
+        }
+    } while ($ApiKey.Length -lt 8)
+}
 
-    if (-not $ApiKey) {
-        do {
-            $ApiKeySecure = Read-Host "  API Key (sp_live_...)" -AsSecureString
-            $ApiKeyBSTR   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ApiKeySecure)
-            $ApiKey       = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($ApiKeyBSTR)
-            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ApiKeyBSTR)
-            if ($ApiKey.Length -lt 8) {
-                Write-Warn "API key seems too short. Please try again."
-            }
-        } while ($ApiKey.Length -lt 8)
-    } else {
-        Write-Info "Using API Key from parameter."
-    }
+if ($ApiUrl) {
+    Write-Info "API URL override: $ApiUrl"
+} else {
+    Write-Info "Using default API URL: $DefaultApiUrl"
 }
 
 # ── 5. Write config ───────────────────────────────────────────────────────────
-$ConfContent = @"
-[serverpulse]
-api_url = $ApiUrl
-api_key = $ApiKey
-"@
+$ConfLines = @(
+    "[serverpulse]",
+    "api_key = $ApiKey"
+)
+if ($ApiUrl) {
+    $ConfLines += "api_url = $ApiUrl"
+}
+$ConfContent = $ConfLines -join "`n"
 Set-Content -Path $ConfPath -Value $ConfContent -Encoding UTF8
 
 # Restrict config file permissions to current user only
@@ -203,12 +201,13 @@ try {
 }
 
 # ── 5b. Connectivity check ────────────────────────────────────────────────────
-Write-Info "Checking connectivity to $ApiUrl ..."
+$HealthBase = if ($ApiUrl) { $ApiUrl } else { $DefaultApiUrl }
+Write-Info "Checking connectivity to $HealthBase ..."
 try {
-    $response = Invoke-WebRequest -Uri "$ApiUrl/health" -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+    $response = Invoke-WebRequest -Uri "$HealthBase/health" -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
     Write-Info "API reachable (HTTP $($response.StatusCode))."
 } catch {
-    Write-Warn "Could not reach $ApiUrl/health — $_"
+    Write-Warn "Could not reach $HealthBase/health — $_"
     Write-Warn "The agent will be installed anyway but won't report until the API is reachable."
 }
 
