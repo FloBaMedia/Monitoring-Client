@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    ServerPulse Agent Installer for Windows
+    ServerMetry Agent Installer for Windows
 .DESCRIPTION
     Downloads the agent.py, creates the config, and registers a Scheduled Task
     to run the agent every minute.
     API URL and API Key can be passed as parameters or environment variables
-    (SERVERPULSE_URL / SERVERPULSE_KEY) to run non-interactively.
+    (SERVERMETRY_URL / SERVERMETRY_KEY, or legacy SERVERPULSE_*) to run non-interactively.
 .EXAMPLE
     # Interactive
     powershell -ExecutionPolicy Bypass -File install-windows.ps1
@@ -17,20 +17,20 @@
     $env:SERVERPULSE_URL="https://api.example.com"; $env:SERVERPULSE_KEY="sp_live_..."; powershell -ExecutionPolicy Bypass -File install-windows.ps1
 #>
 param(
-    [string]$ApiUrl = $env:SERVERPULSE_URL,
-    [string]$ApiKey = $env:SERVERPULSE_KEY
+    [string]$ApiUrl = $(if ($env:SERVERMETRY_URL) { $env:SERVERMETRY_URL } else { $env:SERVERPULSE_URL }),
+    [string]$ApiKey = $(if ($env:SERVERMETRY_KEY) { $env:SERVERMETRY_KEY } else { $env:SERVERPULSE_KEY })
 )
 
 $DefaultApiUrl = "https://api.servermetry.com"
 
 $ErrorActionPreference = "Stop"
 
-$InstallDir  = "C:\ProgramData\ServerPulse"
+$InstallDir  = "C:\ProgramData\ServerMetry"
 $AgentPath   = "$InstallDir\agent.py"
 $ConfPath    = "$InstallDir\agent.conf"
 $LogPath     = "$InstallDir\agent.log"
 $GithubBase  = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
-$TaskName    = "ServerPulseAgent"
+$TaskName    = "ServerMetryAgent"
 
 # All module files that must be present alongside agent.py
 $ModuleFiles = @(
@@ -39,12 +39,14 @@ $ModuleFiles = @(
     "models/__init__.py",
     "models/constants.py",
     "models/limits.py",
+    "models/paths.py",
     "services/__init__.py",
     "services/config_applier.py",
     "services/linux.py",
     "services/darwin.py",
     "services/windows.py",
     "services/updater.py",
+    "services/path_migration.py",
     "utils/__init__.py",
     "utils/config.py",
     "utils/logging.py",
@@ -76,7 +78,7 @@ function Exit-Script {
 }
 
 Write-Host ""
-Write-Host "ServerPulse Agent Installer for Windows" -ForegroundColor Cyan
+Write-Host "ServerMetry Agent Installer for Windows" -ForegroundColor Cyan
 Write-Host "─────────────────────────────────────────────"
 
 # ── 0. Admin check ────────────────────────────────────────────────────────────
@@ -174,7 +176,7 @@ if ($ApiUrl) {
 
 # ── 5. Write config ───────────────────────────────────────────────────────────
 $ConfLines = @(
-    "[serverpulse]",
+    "[servermetry]",
     "api_key = $ApiKey"
 )
 if ($ApiUrl) {
@@ -243,7 +245,7 @@ try {
         -Trigger $trigger `
         -Settings $settings `
         -Principal $principal `
-        -Description "ServerPulse monitoring agent – sends system metrics every minute." `
+        -Description "ServerMetry monitoring agent – sends system metrics every minute." `
         -Force | Out-Null
     Write-Info "Scheduled Task '$TaskName' created (runs as SYSTEM, every minute)."
 } catch {
@@ -254,7 +256,7 @@ try {
         -Trigger $trigger `
         -Settings $settings `
         -RunLevel Highest `
-        -Description "ServerPulse monitoring agent – sends system metrics every minute." `
+        -Description "ServerMetry monitoring agent – sends system metrics every minute." `
         -Force | Out-Null
     Write-Info "Scheduled Task '$TaskName' created (runs as current user, every minute)."
 }

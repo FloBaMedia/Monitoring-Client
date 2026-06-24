@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# ServerPulse Agent Uninstaller for Linux
+# ServerMetry Agent Uninstaller for Linux
 # Usage: sudo bash uninstall.sh
 set -euo pipefail
 
-INSTALL_DIR="/etc/serverpulse"
+INSTALL_DIR="/etc/servermetry"
 AGENT_PATH="$INSTALL_DIR/agent.py"
 CONF_PATH="$INSTALL_DIR/agent.conf"
-LOG_PATH="/var/log/serverpulse-agent.log"
-CRON_MARKER="serverpulse/agent.py"
+LOG_PATH="/var/log/servermetry-agent.log"
+CRON_MARKER="servermetry/agent.py"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -29,7 +29,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo ""
-echo -e "${CYAN}ServerPulse Agent Uninstaller${NC}"
+echo -e "${CYAN}ServerMetry Agent Uninstaller${NC}"
 echo "─────────────────────────────────────────────"
 echo ""
 echo "This will remove:"
@@ -68,5 +68,5 @@ if [[ -f "$LOG_PATH" ]]; then
 fi
 
 echo ""
-info "ServerPulse Agent has been uninstalled."
+info "ServerMetry Agent has been uninstalled."
 echo ""

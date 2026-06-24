@@ -1,83 +1,71 @@
-"""Logging utilities for ServerPulse Agent."""
+"""Logging utilities for ServerMetry Agent."""
 
 import os
 import platform
 import sys
 from datetime import datetime
 
-from models.limits import LOG_MAX_BYTES, LOG_MAX_BACKUPS
+from models.paths import (
+    LEGACY_LINUX_LOG_PATH,
+    LINUX_LOG_PATH,
+    legacy_windows_log_path,
+    resolve_install_dir,
+    windows_log_path,
+)
 
-_LOG_TO_STDERR = None
+_LOG_TO_STDERR = False
 
 
-def _get_log_path():
+def _log_path():
     if platform.system() == "Windows":
-        return os.path.join("C:\\ProgramData\\ServerPulse", "agent.log")
-    return "/var/log/serverpulse-agent.log"
+        if os.path.isfile(windows_log_path()):
+            return windows_log_path()
+        if os.path.isfile(legacy_windows_log_path()):
+            return legacy_windows_log_path()
+        return windows_log_path()
+    if os.path.isfile(LINUX_LOG_PATH):
+        return LINUX_LOG_PATH
+    if os.path.isfile(LEGACY_LINUX_LOG_PATH):
+        return LEGACY_LINUX_LOG_PATH
+    return LINUX_LOG_PATH
 
 
-def _ensure_log_dir(log_path):
-    log_dir = os.path.dirname(log_path)
-    if log_dir and not os.path.exists(log_dir):
+def _ensure_log_dir(path):
+    log_dir = os.path.dirname(path)
+    if log_dir and not os.path.isdir(log_dir):
         try:
-            os.makedirs(log_dir)
-        except OSError:
-            return False
-    return True
-
-
-def _rotate_log(log_path):
-    if not os.path.exists(log_path):
-        return
-
-    if os.path.getsize(log_path) <= LOG_MAX_BYTES:
-        return
-
-    for i in range(LOG_MAX_BACKUPS - 1, 0, -1):
-        src = "{}.{}".format(log_path, i)
-        dst = "{}.{}".format(log_path, i + 1)
-        try:
-            if os.path.exists(dst):
-                os.remove(dst)
-            if os.path.exists(src):
-                os.rename(src, dst)
+            os.makedirs(log_dir, exist_ok=True)
         except OSError:
             pass
 
-    backup = "{}.1".format(log_path)
+
+def log_write(level, message):
+    """Write a log line to the agent log file and optionally stderr."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = "[{}] [{}] {}".format(ts, level, message)
+    path = _log_path()
+    _ensure_log_dir(path)
     try:
-        if os.path.exists(backup):
-            os.remove(backup)
-        os.rename(log_path, backup)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
     except OSError:
         pass
-
-
-def log_write(level, message, debug=False):
-    global _LOG_TO_STDERR
-    if _LOG_TO_STDERR is None:
-        _LOG_TO_STDERR = os.environ.get("SERVERPULSE_DEBUG", "").strip().lower() in ("1", "true", "yes")
-
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = "[{}] {:<7} {}\n".format(ts, level, message)
-
-    if debug or _LOG_TO_STDERR:
-        sys.stderr.write(line)
-
-    log_path = _get_log_path()
-    try:
-        if not _ensure_log_dir(log_path):
-            sys.stderr.write("[{}] {:<7} log_write: could not create log dir\n".format(ts, "ERROR"))
-            return
-
-        _rotate_log(log_path)
-
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception as e:
-        sys.stderr.write("[{}] {:<7} log_write: could not write to {}: {}\n".format(ts, "ERROR", log_path, e))
+    if _LOG_TO_STDERR:
+        print(line, file=sys.stderr)
 
 
 def log_debug(message, debug_flag=False):
+    """Write a debug log line when debug mode is active."""
+    global _LOG_TO_STDERR
     if debug_flag:
-        log_write("DEBUG", message, debug=True)
+        _LOG_TO_STDERR = True
+        log_write("DEBUG", message)
+    elif os.environ.get("SERVERMETRY_DEBUG", "").strip().lower() in ("1", "true", "yes") or os.environ.get(
+        "SERVERPULSE_DEBUG", ""
+    ).strip().lower() in ("1", "true", "yes"):
+        log_write("DEBUG", message)
+
+
+def set_stderr_logging(enabled):
+    global _LOG_TO_STDERR
+    _LOG_TO_STDERR = enabled

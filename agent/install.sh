@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# ServerPulse Agent Installer for Linux
+# ServerMetry Agent Installer for Linux
 # Usage: curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh | bash
 set -euo pipefail
 
 GITHUB_BASE="https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
-INSTALL_DIR="/etc/serverpulse"
+INSTALL_DIR="/etc/servermetry"
 AGENT_PATH="$INSTALL_DIR/agent.py"
 CONF_PATH="$INSTALL_DIR/agent.conf"
-CRON_MARKER="serverpulse/agent.py"
+CRON_MARKER="servermetry/agent.py"
 DEFAULT_API_URL="https://api.servermetry.com"
 
 # All module files that must be present alongside agent.py
@@ -17,12 +17,14 @@ MODULE_FILES=(
     "models/__init__.py"
     "models/constants.py"
     "models/limits.py"
+    "models/paths.py"
     "services/__init__.py"
     "services/config_applier.py"
     "services/linux.py"
     "services/darwin.py"
     "services/windows.py"
     "services/updater.py"
+    "services/path_migration.py"
     "utils/__init__.py"
     "utils/config.py"
     "utils/logging.py"
@@ -56,7 +58,7 @@ if [[ $EUID -ne 0 ]]; then
     die "This installer must be run as root. Try: sudo bash install.sh"
 fi
 
-info "ServerPulse Agent Installer"
+info "ServerMetry Agent Installer"
 echo "─────────────────────────────────────────────"
 
 # ── 2. Python 3.6+ check ─────────────────────────────────────────────────────
@@ -103,9 +105,9 @@ info "Agent installed in $INSTALL_DIR"
 # api_url is optional — agent defaults to https://api.servermetry.com unless
 # SERVERPULSE_URL is set (override only).
 
-API_URL_OVERRIDE="${SERVERPULSE_URL:-}"
+API_URL_OVERRIDE="${SERVERMETRY_URL:-${SERVERPULSE_URL:-}}"
 API_URL_OVERRIDE="${API_URL_OVERRIDE%/}"
-API_KEY="${SERVERPULSE_KEY:-}"
+API_KEY="${SERVERMETRY_KEY:-${SERVERPULSE_KEY:-}}"
 
 CONF_KEY=""
 if [[ -f "$CONF_PATH" ]]; then
@@ -147,7 +149,7 @@ fi
 
 # ── 6. Write config ───────────────────────────────────────────────────────────
 {
-    echo "[serverpulse]"
+    echo "[servermetry]"
     echo "api_key = $API_KEY"
     if [[ -n "$API_URL_OVERRIDE" ]]; then
         echo "api_url = $API_URL_OVERRIDE"
@@ -183,10 +185,10 @@ fi
 echo ""
 info "Installation complete!"
 info "The agent will run every minute via crontab."
-info "Logs: /var/log/serverpulse-agent.log"
+info "Logs: /var/log/servermetry-agent.log"
 echo ""
 echo "To test a live run now (sends real data to your API):"
 echo "  sudo $PYTHON $AGENT_PATH"
 echo ""
 echo "To view logs:"
-echo "  tail -f /var/log/serverpulse-agent.log"
+echo "  tail -f /var/log/servermetry-agent.log"

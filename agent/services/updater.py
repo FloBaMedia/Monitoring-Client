@@ -1,9 +1,8 @@
 """
-ServerPulse Agent self-updater.
+ServerMetry Agent self-updater.
 Fetches the latest agent.py from GitHub, compares versions, and updates in-place.
 """
 
-import ast
 import os
 import platform
 import re
@@ -15,6 +14,7 @@ import urllib.request
 
 from models.constants import AGENT_VERSION
 from models.limits import UPDATE_FETCH_TIMEOUT
+from models.paths import resolve_install_dir
 from utils.lock import FileLock, atomic_write
 from utils.logging import log_write
 
@@ -29,12 +29,14 @@ _MODULE_FILES = [
     "models/__init__.py",
     "models/constants.py",
     "models/limits.py",
+    "models/paths.py",
     "services/__init__.py",
     "services/config_applier.py",
     "services/linux.py",
     "services/darwin.py",
     "services/windows.py",
     "services/updater.py",
+    "services/path_migration.py",
     "utils/__init__.py",
     "utils/config.py",
     "utils/logging.py",
@@ -43,24 +45,6 @@ _MODULE_FILES = [
     "utils/snapshot.py",
 ]
 
-_STATE_PATHS = {
-    "Linux": "/etc/serverpulse/.update_check_ts",
-    "Darwin": "/etc/serverpulse/.update_check_ts",
-    "Windows": r"C:\ProgramData\ServerPulse\.update_check_ts",
-}
-
-_LOCK_PATHS = {
-    "Linux": "/etc/serverpulse/.update.lock",
-    "Darwin": "/etc/serverpulse/.update.lock",
-    "Windows": r"C:\ProgramData\ServerPulse\.update.lock",
-}
-
-_INSTALL_PATHS = {
-    "Linux": "/etc/serverpulse/agent.py",
-    "Darwin": "/etc/serverpulse/agent.py",
-    "Windows": r"C:\ProgramData\ServerPulse\agent.py",
-}
-
 
 def _installed_path():
     candidate = os.path.abspath(
@@ -68,7 +52,10 @@ def _installed_path():
     )
     if os.path.isfile(candidate):
         return candidate
-    return _INSTALL_PATHS.get(platform.system(), candidate)
+    resolved = os.path.join(resolve_install_dir(), "agent.py")
+    if os.path.isfile(resolved):
+        return resolved
+    return candidate
 
 
 def _parse_version(content):
@@ -97,11 +84,11 @@ def _fetch(url, timeout=UPDATE_FETCH_TIMEOUT):
 
 
 def _state_path():
-    return _STATE_PATHS.get(platform.system(), os.path.join(os.path.dirname(_installed_path()), ".update_check_ts"))
+    return os.path.join(os.path.dirname(_installed_path()), ".update_check_ts")
 
 
 def _lock_path():
-    return _LOCK_PATHS.get(platform.system(), os.path.join(os.path.dirname(_installed_path()), ".update.lock"))
+    return os.path.join(os.path.dirname(_installed_path()), ".update.lock")
 
 
 def _read_state():
@@ -316,6 +303,13 @@ def check_and_update(log_debug_fn=None, force=False):
                     log_debug_fn("Auto-update: updated {}".format(rel_path))
 
             _write_last_check_ts(remote_version=remote_version)
+
+            try:
+                from services.path_migration import migrate_install_paths
+                migrate_install_paths()
+            except Exception as e:
+                log_write("WARNING", "Auto-update: path migration skipped: {}".format(e))
+
             log_write(
                 "INFO",
                 "Auto-update: successfully updated to v{} (backup: {})".format(

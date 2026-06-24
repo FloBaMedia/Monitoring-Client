@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-    ServerPulse Agent Uninstaller for Windows
+    ServerMetry Agent Uninstaller for Windows
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File uninstall-windows.ps1
 #>
 
 $ErrorActionPreference = "SilentlyContinue"
 
-$InstallDir = "C:\ProgramData\ServerPulse"
-$TaskName   = "ServerPulseAgent"
+$InstallDir = "C:\ProgramData\ServerMetry"
+$TaskName   = "ServerMetryAgent"
 
 function Write-Info  { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Green }
 function Write-Warn  { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
@@ -45,7 +45,7 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
 }
 
 Write-Host ""
-Write-Host "ServerPulse Agent Uninstaller" -ForegroundColor Cyan
+Write-Host "ServerMetry Agent Uninstaller" -ForegroundColor Cyan
 Write-Host "─────────────────────────────────────────────"
 Write-Host ""
 Write-Host "This will remove:"
@@ -91,7 +91,7 @@ if (Test-Path $InstallDir) {
 }
 
 Write-Host ""
-Write-Info "ServerPulse Agent has been uninstalled."
+Write-Info "ServerMetry Agent has been uninstalled."
 Write-Host ""
 
 Exit-Script 0

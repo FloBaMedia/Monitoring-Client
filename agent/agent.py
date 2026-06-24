@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ServerPulse Agent — run with -h or --help for usage."""
+"""ServerMetry Agent — run with -h or --help for usage."""
 
 import json
 import os
@@ -21,12 +21,14 @@ def _bootstrap():
         "models/__init__.py",
         "models/constants.py",
         "models/limits.py",
+        "models/paths.py",
         "services/__init__.py",
         "services/config_applier.py",
         "services/linux.py",
         "services/darwin.py",
         "services/windows.py",
         "services/updater.py",
+        "services/path_migration.py",
         "utils/__init__.py",
         "utils/config.py",
         "utils/logging.py",
@@ -116,7 +118,7 @@ def _check_service_port(port, protocol=None, timeout=3):
 
 
 HELP_TEXT = """\
-ServerPulse Agent {version}
+ServerMetry Agent {version}
 
 Usage: python3 agent.py [OPTIONS]
 
@@ -132,7 +134,7 @@ Options:
   --discover-ports                Scan all listening TCP ports and report to server
   --apply-template <id>           Fetch and execute a config template by ID
     --schedule <cron|remove>      Schedule or remove the template as a cron job
-  --config <path>                 Path to config file (default: /etc/serverpulse/config.ini)
+  --config <path>                 Path to config file (default: /etc/servermetry/agent.conf)
   --no-apply-config               Skip fetching and applying remote config changes
   --debug                         Enable verbose debug logging
   -h, --help                      Show this help message
@@ -300,12 +302,18 @@ def main():
     info, config_status, dry_run, check, check_update, force_update, show_update_status, cli_debug, config_override, template_id, schedule, no_apply_config, discover_ports = parse_args()
     DEBUG = cli_debug
 
+    try:
+        from services.path_migration import migrate_install_paths
+        migrate_install_paths()
+    except ImportError:
+        pass
+
     values, conf_path = load_config(config_override)
 
     if info:
         api_url = values.get("api_url", DEFAULT_API_URL)
         server_id = values.get("server_id", "(not configured)")
-        print("ServerPulse Agent")
+        print("ServerMetry Agent")
         print("  Version:    {}".format(AGENT_VERSION))
         print("  Python:     {}".format(platform.python_version()))
         print("  Platform:   {} {} ({})".format(
@@ -319,7 +327,7 @@ def main():
 
     if config_status:
         stored_changed_at, remote_config, stored_services = _load_config_state()
-        print("ServerPulse Agent — Config Status")
+        print("ServerMetry Agent — Config Status")
         print("")
         print("Local config ({})".format(conf_path or "env vars"))
         print("  API URL:      {}".format(values.get("api_url", DEFAULT_API_URL)))
@@ -353,7 +361,7 @@ def main():
         except ImportError:
             print(
                 "ERROR: services/updater.py is missing. Run:\n"
-                "  curl -o /etc/serverpulse/services/updater.py "
+                "  curl -o /etc/servermetry/services/updater.py "
                 "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/services/updater.py"
             )
             sys.exit(1)
@@ -381,7 +389,7 @@ def main():
         DEBUG = True
 
     if DEBUG:
-        log_debug("ServerPulse Agent {} starting (debug mode)".format(AGENT_VERSION), debug_flag=DEBUG)
+        log_debug("ServerMetry Agent {} starting (debug mode)".format(AGENT_VERSION), debug_flag=DEBUG)
         log_debug("Platform: {} {}".format(platform.system(), platform.release()), debug_flag=DEBUG)
         log_debug("dry_run={}".format(dry_run), debug_flag=DEBUG)
         if template_id:

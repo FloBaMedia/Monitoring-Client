@@ -41,7 +41,7 @@ def _request(method, base_url, path, api_key, body=None, timeout=10, log_debug_f
     headers = {
         "Content-Type": "application/json",
         "X-Server-Key": api_key,
-        "User-Agent": "ServerPulseAgent/{}".format(AGENT_VERSION),
+        "User-Agent": "ServerMetryAgent/{}".format(AGENT_VERSION),
     }
 
     data = None

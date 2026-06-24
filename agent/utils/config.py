@@ -1,4 +1,4 @@
-"""Configuration loading and validation for ServerPulse Agent."""
+"""Configuration loading and validation for ServerMetry Agent."""
 
 import configparser
 import getpass
@@ -7,30 +7,61 @@ import platform
 import sys
 
 from models.constants import DEFAULT_API_URL
+from models.paths import (
+    CONFIG_SECTION,
+    LEGACY_CONFIG_SECTION,
+    agent_conf_path,
+    install_dir,
+    legacy_install_dir,
+    resolve_install_dir,
+)
 
 REQUIRED_FIELDS = [
     ("api_key", "API Key (sp_live_...)", None, True),
 ]
 
 
+def _env(name, legacy_name):
+    return (os.environ.get(name, "") or os.environ.get(legacy_name, "")).strip()
+
+
 def _default_conf_path():
-    """Return the preferred writable config path for the current platform/user."""
-    if platform.system() == "Windows":
-        return "C:\\ProgramData\\ServerPulse\\agent.conf"
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        return "/etc/serverpulse/agent.conf"
-    return os.path.expanduser("~/.config/serverpulse/agent.conf")
+    return agent_conf_path()
 
 
 def _conf_search_paths(override_path=None):
     if override_path:
         return [override_path]
-    return [
-        "C:\\ProgramData\\ServerPulse\\agent.conf",
-        "/etc/serverpulse/agent.conf",
-        os.path.expanduser("~/.config/serverpulse/agent.conf"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.conf"),
-    ]
+    paths = []
+    for base in (resolve_install_dir(), install_dir(), legacy_install_dir()):
+        p = os.path.join(base, "agent.conf")
+        if p not in paths:
+            paths.append(p)
+    paths.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.conf"))
+    return paths
+
+
+def _read_section(cfg, values):
+    for sec in (CONFIG_SECTION, LEGACY_CONFIG_SECTION):
+        if not cfg.has_section(sec):
+            continue
+        for key, _, _, _ in REQUIRED_FIELDS:
+            if not values.get(key):
+                val = cfg.get(sec, key, fallback="").strip()
+                if val:
+                    values[key] = val
+        if not values.get("api_url"):
+            api_url = cfg.get(sec, "api_url", fallback="").strip()
+            if api_url:
+                values["api_url"] = api_url.rstrip("/")
+        if "debug" not in values:
+            values["debug"] = cfg.get(sec, "debug", fallback="false").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+        return True
+    return False
 
 
 def load_config(override_path=None):
@@ -46,9 +77,9 @@ def load_config(override_path=None):
 
     values = {}
 
-    env_url   = os.environ.get("SERVERPULSE_API_URL", "").strip()
-    env_key   = os.environ.get("SERVERPULSE_API_KEY", "").strip()
-    env_debug = os.environ.get("SERVERPULSE_DEBUG", "").strip().lower() in ("1", "true", "yes")
+    env_url = _env("SERVERMETRY_API_URL", "SERVERPULSE_API_URL")
+    env_key = _env("SERVERMETRY_API_KEY", "SERVERPULSE_API_KEY")
+    env_debug = _env("SERVERMETRY_DEBUG", "SERVERPULSE_DEBUG").lower() in ("1", "true", "yes")
     if env_url:
         values["api_url"] = env_url.rstrip("/")
     if env_key:
@@ -66,19 +97,7 @@ def load_config(override_path=None):
             continue
         try:
             cfg.read(path, encoding="utf-8")
-            sec = "serverpulse"
-            if cfg.has_section(sec):
-                for key, _, _, _ in REQUIRED_FIELDS:
-                    if not values.get(key):
-                        val = cfg.get(sec, key, fallback="").strip()
-                        if val:
-                            values[key] = val
-                if not values.get("api_url"):
-                    api_url = cfg.get(sec, "api_url", fallback="").strip()
-                    if api_url:
-                        values["api_url"] = api_url.rstrip("/")
-                if "debug" not in values:
-                    values["debug"] = cfg.get(sec, "debug", fallback="false").strip().lower() in ("1", "true", "yes")
+            if _read_section(cfg, values):
                 log_debug("Config loaded from {}".format(path))
                 return values, path
         except Exception as e:
@@ -103,16 +122,18 @@ def _save_config(path, values):
         cfg = configparser.ConfigParser()
         if os.path.exists(path):
             cfg.read(path, encoding="utf-8")
-        if not cfg.has_section("serverpulse"):
-            cfg.add_section("serverpulse")
+        if not cfg.has_section(CONFIG_SECTION):
+            cfg.add_section(CONFIG_SECTION)
+        if cfg.has_section(LEGACY_CONFIG_SECTION):
+            cfg.remove_section(LEGACY_CONFIG_SECTION)
         for key, val in values.items():
             if key == "debug":
-                cfg.set("serverpulse", "debug", "true" if val else "false")
+                cfg.set(CONFIG_SECTION, "debug", "true" if val else "false")
             elif key == "api_url" and not val:
-                if cfg.has_option("serverpulse", "api_url"):
-                    cfg.remove_option("serverpulse", "api_url")
+                if cfg.has_option(CONFIG_SECTION, "api_url"):
+                    cfg.remove_option(CONFIG_SECTION, "api_url")
             else:
-                cfg.set("serverpulse", key, str(val))
+                cfg.set(CONFIG_SECTION, key, str(val))
         if platform.system() != "Windows":
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -157,7 +178,7 @@ def ensure_config(values, conf_path, override_path=None):
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     if not interactive:
         log_write("ERROR", "Config incomplete. Missing fields: {}. "
-                  "Add them to {} or set SERVERPULSE_API_KEY.".format(
+                  "Add them to {} or set SERVERMETRY_API_KEY.".format(
                       ", ".join(k for k, *_ in missing), save_path))
         sys.exit(1)
 

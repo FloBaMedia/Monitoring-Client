@@ -1,5 +1,5 @@
 """
-ServerPulse config applier – applies server configuration to the local system.
+ServerMetry config applier – applies server configuration to the local system.
 All functions are best-effort: failures are logged but never abort the agent run.
 """
 
@@ -11,6 +11,14 @@ import sys
 import tempfile
 
 from models.limits import CONFIG_APPLIER_TIMEOUT, EXTRA_CMD_TIMEOUT, STATE_ENCODING
+from models.paths import (
+    CRON_MARKER,
+    LEGACY_CRON_MARKER,
+    LEGACY_TEMPLATE_CRON_MARKER,
+    LEGACY_WINDOWS_TASK_NAME,
+    TEMPLATE_CRON_MARKER,
+    WINDOWS_TASK_NAME,
+)
 from utils.lock import atomic_write
 from utils.logging import log_write
 from utils.validation import (
@@ -161,7 +169,7 @@ def apply_dns(custom_dns):
         ok, _, err = _run(["powershell", "-Command", ps_cmd])
     else:
         try:
-            lines = ["# Managed by ServerPulse Agent\n"]
+            lines = ["# Managed by ServerMetry Agent\n"]
             for dns in dns_list:
                 lines.append("nameserver {}\n".format(dns))
             atomic_write("/etc/resolv.conf", "".join(lines), encoding=STATE_ENCODING)
@@ -206,7 +214,7 @@ def update_schedule(interval_seconds):
         return True
 
     if platform.system() == "Windows":
-        task_name = "ServerPulseAgent"
+        task_name = WINDOWS_TASK_NAME
         interval_minutes = max(1, round(interval / 60))
         ps_cmd = (
             "$t = Get-ScheduledTask -TaskName '{task}' -ErrorAction SilentlyContinue; "
@@ -240,17 +248,18 @@ def update_schedule(interval_seconds):
             if not stripped or stripped.startswith("#"):
                 new_lines.append(line)
                 continue
-            if "serverpulse/agent.py" in line:
+            if CRON_MARKER in line or LEGACY_CRON_MARKER in line:
                 parts = stripped.split()
                 if len(parts) >= 6:
                     cmd_part = " ".join(parts[5:])
+                    cmd_part = cmd_part.replace(LEGACY_CRON_MARKER, CRON_MARKER)
                     new_lines.append("{} {}".format(cron_expr, cmd_part))
                     updated = True
                     continue
             new_lines.append(line)
 
         if not updated:
-            log_write("WARNING", "ServerPulse cron entry not found; cannot update interval")
+            log_write("WARNING", "ServerMetry cron entry not found; cannot update interval")
             return False
 
         new_cron = "\n".join(new_lines) + "\n"
@@ -275,8 +284,6 @@ def update_schedule(interval_seconds):
 
 
 # ── Template Scheduling ───────────────────────────────────────────────────────
-
-_TEMPLATE_CRON_MARKER = "# serverpulse-template-"
 
 
 def _validate_cron_expr(expr):
@@ -326,7 +333,8 @@ def schedule_template(template_id, cron_expr):
         return False
 
     agent_path = os.path.realpath(sys.argv[0])
-    marker = "{}{}".format(_TEMPLATE_CRON_MARKER, safe_id)
+    legacy_marker = "{}{}".format(LEGACY_TEMPLATE_CRON_MARKER, safe_id)
+    marker = "{}{}".format(TEMPLATE_CRON_MARKER, safe_id)
     cron_line = "{} python3 {} --apply-template {}  {}".format(
         cron_expr, agent_path, safe_id, marker
     )
@@ -336,7 +344,7 @@ def schedule_template(template_id, cron_expr):
     new_lines = []
     updated = False
     for line in lines:
-        if marker in line:
+        if marker in line or legacy_marker in line:
             new_lines.append(cron_line)
             updated = True
         else:
@@ -355,7 +363,8 @@ def schedule_template(template_id, cron_expr):
 def unschedule_template(template_id):
     """Remove the cron entry for a template. Only supported on Linux."""
     safe_id = "".join(c for c in template_id if c.isalnum() or c == "-")
-    marker = "{}{}".format(_TEMPLATE_CRON_MARKER, safe_id)
+    legacy_marker = "{}{}".format(LEGACY_TEMPLATE_CRON_MARKER, safe_id)
+    marker = "{}{}".format(TEMPLATE_CRON_MARKER, safe_id)
 
     if platform.system() != "Linux":
         log_write("WARNING", "Template unscheduling is only supported on Linux")
@@ -363,7 +372,7 @@ def unschedule_template(template_id):
 
     _, current_cron, _ = _run(["crontab", "-l"])
     lines = current_cron.splitlines() if current_cron else []
-    new_lines = [l for l in lines if marker not in l]
+    new_lines = [l for l in lines if marker not in l and legacy_marker not in l]
 
     if len(new_lines) == len(lines):
         log_write("INFO", "No scheduled cron entry found for template {}".format(safe_id))
