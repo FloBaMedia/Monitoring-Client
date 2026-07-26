@@ -25,6 +25,8 @@ __pycache__/
 .config_state.lock
 .update_check_ts
 .update.lock
+.update_staging/
+.update_backup/
 
 # OS
 .DS_Store
