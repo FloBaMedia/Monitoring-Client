@@ -1,4 +1,4 @@
-"""HTTP client for ServerPulse API."""
+"""HTTP client for ServerMetry API."""
 
 import json
 import math
@@ -36,7 +36,12 @@ def _sanitize_payload(payload):
     return result
 
 
-def _request(method, base_url, path, api_key, body=None, timeout=10, log_debug_fn=None):
+def _request(method, base_url, path, api_key, body=None, timeout=10, log_debug_fn=None, retries=0, backoff=0.5):
+    """
+    Perform a single HTTP request, optionally retrying on transient failures
+    (URLError / timeouts / HTTP 5xx). HTTP 4xx responses are never retried,
+    since retrying won't change a client-side error.
+    """
     url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
     headers = {
         "Content-Type": "application/json",
@@ -51,46 +56,64 @@ def _request(method, base_url, path, api_key, body=None, timeout=10, log_debug_f
         except (TypeError, ValueError):
             return False, None, "JSON serialization failed"
 
-    start = time.time()
-    try:
-        ctx = ssl.create_default_context()
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-            resp_body = resp.read().decode("utf-8", errors="replace")
+    attempt = 0
+    while True:
+        start = time.time()
+        try:
+            ctx = ssl.create_default_context()
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+                resp_body = resp.read().decode("utf-8", errors="replace")
+                elapsed = round(time.time() - start, 3)
+                if log_debug_fn:
+                    log_debug_fn("{} {} -> {} in {}s".format(method, url, resp.status, elapsed))
+                try:
+                    result = json.loads(resp_body) if resp_body else {}
+                    return True, result, None
+                except json.JSONDecodeError:
+                    return True, resp_body, None
+        except urllib.error.HTTPError as e:
+            resp_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
             elapsed = round(time.time() - start, 3)
             if log_debug_fn:
-                log_debug_fn("{} {} -> {} in {}s".format(method, url, resp.status, elapsed))
-            try:
-                result = json.loads(resp_body) if resp_body else {}
-                return True, result, None
-            except json.JSONDecodeError:
-                return True, resp_body, None
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        elapsed = round(time.time() - start, 3)
-        if log_debug_fn:
-            log_debug_fn("{} {} -> HTTP {} in {}s".format(method, url, e.code, elapsed))
-        return False, None, "HTTP {}: {}".format(e.code, body[:200])
-    except urllib.error.URLError as e:
-        elapsed = round(time.time() - start, 3)
-        if log_debug_fn:
-            log_debug_fn("{} {} -> ERROR {} in {}s".format(method, url, e.reason, elapsed))
-        return False, None, str(e.reason)
-    except Exception as e:
-        elapsed = round(time.time() - start, 3)
-        if log_debug_fn:
-            log_debug_fn("{} {} -> ERROR {} in {}s".format(method, url, e, elapsed))
-        return False, None, str(e)
+                log_debug_fn("{} {} -> HTTP {} in {}s".format(method, url, e.code, elapsed))
+            if e.code >= 500 and attempt < retries:
+                attempt += 1
+                if log_debug_fn:
+                    log_debug_fn("{} {} -> retrying ({}/{}) after HTTP {}".format(method, url, attempt, retries, e.code))
+                time.sleep(backoff * attempt)
+                continue
+            return False, None, "HTTP {}: {}".format(e.code, resp_body[:200])
+        except urllib.error.URLError as e:
+            elapsed = round(time.time() - start, 3)
+            if log_debug_fn:
+                log_debug_fn("{} {} -> ERROR {} in {}s".format(method, url, e.reason, elapsed))
+            if attempt < retries:
+                attempt += 1
+                if log_debug_fn:
+                    log_debug_fn("{} {} -> retrying ({}/{}) after {}".format(method, url, attempt, retries, e.reason))
+                time.sleep(backoff * attempt)
+                continue
+            return False, None, str(e.reason)
+        except Exception as e:
+            elapsed = round(time.time() - start, 3)
+            if log_debug_fn:
+                log_debug_fn("{} {} -> ERROR {} in {}s".format(method, url, e, elapsed))
+            return False, None, str(e)
 
 
 def post_metrics(api_url, api_key, metrics, log_debug_fn=None):
-    ok, result, err = _request("POST", api_url, "api/v1/agent/metrics", api_key, metrics, timeout=API_POST_TIMEOUT, log_debug_fn=log_debug_fn)
+    """Returns (ok, config_changed_at, commands, err). err is None on success."""
+    ok, result, err = _request(
+        "POST", api_url, "api/v1/agent/metrics", api_key, metrics,
+        timeout=API_POST_TIMEOUT, log_debug_fn=log_debug_fn, retries=2,
+    )
     if not ok:
-        return False, None, []
+        return False, None, [], err
     data = result.get("data", {}) if isinstance(result, dict) else {}
     config_changed_at = data.get("configChangedAt") if isinstance(data, dict) else None
     commands = data.get("commands", []) if isinstance(data, dict) else []
-    return True, config_changed_at, commands
+    return True, config_changed_at, commands, None
 
 
 def get_config(api_url, api_key, log_debug_fn=None):

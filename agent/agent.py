@@ -284,13 +284,16 @@ def apply_template_script(api_url, api_key, template_id, server_id, log_debug_fn
     from client.api import apply_template
 
     log_write("INFO", "Fetching template {} for server {}...".format(template_id, server_id))
-    success, result = apply_template(api_url, api_key, template_id, server_id, log_debug_fn=log_debug_fn)
+    success, result, err = apply_template(api_url, api_key, template_id, server_id, log_debug_fn=log_debug_fn)
 
     if not success:
-        log_write("ERROR", "Failed to fetch template from API")
+        log_write("ERROR", "Failed to fetch template from API: {}".format(err))
         return False
 
-    script_content = result.get("scriptContent")
+    data = result.get("data", {}) if isinstance(result, dict) else {}
+    script_content = data.get("scriptContent") if isinstance(data, dict) else None
+    if not script_content and isinstance(result, dict):
+        script_content = result.get("scriptContent")
     if not script_content:
         log_write("INFO", "Template has no scriptContent to execute")
         return True
@@ -481,9 +484,11 @@ def main():
         sys.exit(0)
 
     from client.api import post_metrics
-    ok, config_changed_at, commands = post_metrics(
+    ok, config_changed_at, commands, post_err = post_metrics(
         api_url, api_key, metrics, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
     )
+    if not ok:
+        log_write("ERROR", "Failed to post metrics: {}".format(post_err))
 
     if ok and not no_apply_config and config_changed_at != stored_changed_at:
         from client.api import get_config

@@ -20,6 +20,12 @@ REQUIRED_FIELDS = [
     ("api_key", "API Key (sp_live_...)", None, True),
 ]
 
+# Optional fields: read from config/env if present, but never prompted for
+# and never required.
+OPTIONAL_FIELDS = [
+    ("server_id", "SERVERMETRY_SERVER_ID", "SERVERPULSE_SERVER_ID"),
+]
+
 
 def _env(name, legacy_name):
     return (os.environ.get(name, "") or os.environ.get(legacy_name, "")).strip()
@@ -60,6 +66,11 @@ def _read_section(cfg, values):
                 "true",
                 "yes",
             )
+        for key, _, _ in OPTIONAL_FIELDS:
+            if not values.get(key):
+                val = cfg.get(sec, key, fallback="").strip()
+                if val:
+                    values[key] = val
         return True
     return False
 
@@ -86,6 +97,10 @@ def load_config(override_path=None):
         values["api_key"] = env_key
     if env_debug:
         values["debug"] = True
+    for key, env_name, legacy_env_name in OPTIONAL_FIELDS:
+        env_val = _env(env_name, legacy_env_name)
+        if env_val:
+            values[key] = env_val
     if env_url and env_key:
         log_debug("Config loaded from environment variables")
         return values, None
@@ -96,7 +111,8 @@ def load_config(override_path=None):
         if not os.path.exists(path):
             continue
         try:
-            cfg.read(path, encoding="utf-8")
+            # utf-8-sig tolerates a UTF-8 BOM (PowerShell Set-Content -Encoding UTF8)
+            cfg.read(path, encoding="utf-8-sig")
             if _read_section(cfg, values):
                 log_debug("Config loaded from {}".format(path))
                 return values, path
@@ -121,7 +137,7 @@ def _save_config(path, values):
             os.makedirs(conf_dir)
         cfg = configparser.ConfigParser()
         if os.path.exists(path):
-            cfg.read(path, encoding="utf-8")
+            cfg.read(path, encoding="utf-8-sig")
         if not cfg.has_section(CONFIG_SECTION):
             cfg.add_section(CONFIG_SECTION)
         if cfg.has_section(LEGACY_CONFIG_SECTION):

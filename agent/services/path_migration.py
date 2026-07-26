@@ -17,6 +17,7 @@ from models.paths import (
     LEGACY_CRON_MARKER,
     LEGACY_LINUX_LOG_PATH,
     LEGACY_TEMPLATE_CRON_MARKER,
+    LEGACY_WINDOWS_LOG_PATH,
     LEGACY_WINDOWS_TASK_NAME,
     LINUX_LOG_PATH,
     MIGRATION_MARKER,
@@ -51,7 +52,7 @@ def _migrate_config_file(conf_path):
         return
 
     cfg = configparser.ConfigParser()
-    cfg.read(conf_path, encoding="utf-8")
+    cfg.read(conf_path, encoding="utf-8-sig")
 
     source_section = None
     if cfg.has_section(CONFIG_SECTION):
@@ -162,9 +163,16 @@ def _migrate_windows_task(legacy_dir, new_dir):
         "  $python = (Get-ScheduledTask -TaskName $legacy).Actions[0].Execute; "
         "  Unregister-ScheduledTask -TaskName $legacy -Confirm:$false -ErrorAction SilentlyContinue; "
         "  $action = New-ScheduledTaskAction -Execute $python -Argument '\"{new_agent}\" --config \"{new_conf}\"'; "
-        "  $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1); "
-        "  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable; "
-        "  Register-ScheduledTask -TaskName $new -Action $action -Trigger $trigger -Settings $settings "
+        "  $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) "
+        "    -RepetitionInterval (New-TimeSpan -Minutes 1) "
+        "    -RepetitionDuration (New-TimeSpan -Days 9999); "
+        "  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries "
+        "    -DontStopIfGoingOnBatteries -StartWhenAvailable "
+        "    -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew; "
+        "  $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' "
+        "    -LogonType ServiceAccount -RunLevel Highest; "
+        "  Register-ScheduledTask -TaskName $new -Action $action -Trigger $trigger "
+        "    -Settings $settings -Principal $principal "
         "    -Description 'ServerMetry monitoring agent' -Force | Out-Null; "
         "  Write-Output 'migrated'; "
         "}} else {{ "

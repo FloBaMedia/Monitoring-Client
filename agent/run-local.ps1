@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    ServerPulse - Local Test Runner for Windows
+    ServerMetry - Local Test Runner for Windows
     Runs the agent without installing anything.
     Config is stored in .\agent.conf (gitignored).
 .PARAMETER DryRun
@@ -31,18 +31,19 @@ $ErrorActionPreference = "Stop"
 $ScriptDir     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $AgentPath     = Join-Path $ScriptDir "agent.py"
 $ConfPath      = Join-Path $ScriptDir "agent.conf"
-$DefaultApiUrl = "https://api.yourdomain.com"
 
 function Write-Info { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Green }
 function Write-Warn { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
 
-# Find Python
+# Find Python (skip Microsoft Store stub)
 $PythonExe = $null
 foreach ($cmd in @("python", "python3", "py")) {
     try {
+        $resolved = (Get-Command $cmd -ErrorAction SilentlyContinue).Source
+        if ($resolved -and $resolved -match "WindowsApps") { continue }
         $null = & $cmd -c "import sys; sys.exit(0 if sys.version_info>=(3,6) else 1)" 2>$null
         if ($LASTEXITCODE -eq 0) {
-            $PythonExe = (Get-Command $cmd -ErrorAction SilentlyContinue).Source
+            $PythonExe = $resolved
             break
         }
     } catch { }
@@ -56,7 +57,7 @@ if (-not $PythonExe) {
 Write-Info "Using Python at $PythonExe"
 
 # Info: if no local agent.conf exists the agent uses its system config
-# (C:\ProgramData\ServerPulse\agent.conf) or prompts via ensure_config
+# (C:\ProgramData\ServerMetry\agent.conf) or prompts via ensure_config
 if (Test-Path $ConfPath) {
     Write-Info "Using local config: $ConfPath"
 } else {

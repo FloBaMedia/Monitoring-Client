@@ -1,12 +1,12 @@
-# ServerPulse Agent
+# ServerMetry Agent
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.6+](https://img.shields.io/badge/python-3.6%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
-Lightweight monitoring agent for [ServerPulse](https://github.com/FloBaMedia/Monitoring-API). Collects system metrics (CPU, RAM, disk, network, processes) and ships them to the ServerPulse API once per minute.
+Lightweight monitoring agent for [ServerMetry](https://github.com/FloBaMedia/Monitoring-API). Collects system metrics (CPU, RAM, disk, network, processes) and ships them to the ServerMetry API once per minute.
 
-**Zero external dependencies** — pure Python 3.6+ standard library only.
+**Zero external dependencies** — pure Python 3.8+ standard library only.
 
 ---
 
@@ -36,7 +36,7 @@ cat /tmp/install.sh
 
 # 3. Make it executable and run with your credentials
 chmod +x /tmp/install.sh
-SERVERPULSE_URL=https://your-api.example.com SERVERPULSE_KEY=sp_live_... sudo /tmp/install.sh
+SERVERMETRY_URL=https://your-api.example.com SERVERMETRY_KEY=sp_live_... sudo /tmp/install.sh
 ```
 
 Or interactive (prompts for API URL and key):
@@ -51,16 +51,18 @@ sudo /tmp/install.sh
 
 ```powershell
 # 1. Download the installer
-Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install-windows.ps1' -OutFile $env:TEMP\install-serverpulse.ps1
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install-windows.ps1' -OutFile $env:TEMP\install-servermetry.ps1
 
 # 2. Review the script before running
-Get-Content $env:TEMP\install-serverpulse.ps1
+Get-Content $env:TEMP\install-servermetry.ps1
 
 # 3. Execute with your credentials
-& $env:TEMP\install-serverpulse.ps1 -ApiUrl "https://your-api.example.com" -ApiKey "sp_live_..."
+& $env:TEMP\install-servermetry.ps1 -ApiUrl "https://your-api.example.com" -ApiKey "sp_live_..."
 ```
 
-> **Tip:** The ServerPulse dashboard generates the exact command with your API key pre-filled after you add a new server.
+Install Python **for all users** (not just the current account) so the Scheduled Task running as `SYSTEM` can execute it.
+
+> **Tip:** The ServerMetry dashboard generates the exact command with your API key pre-filled after you add a new server.
 
 ---
 
@@ -68,14 +70,14 @@ Get-Content $env:TEMP\install-serverpulse.ps1
 
 | | Linux / macOS | Windows |
 |---|---|---|
-| **Install dir** | `/etc/serverpulse/` | `C:\ProgramData\ServerPulse\` |
-| **Config file** | `/etc/serverpulse/agent.conf` | `C:\ProgramData\ServerPulse\agent.conf` |
-| **Log file** | `/var/log/serverpulse-agent.log` | `C:\ProgramData\ServerPulse\agent.log` |
+| **Install dir** | `/etc/servermetry/` | `C:\ProgramData\ServerMetry\` |
+| **Config file** | `/etc/servermetry/agent.conf` | `C:\ProgramData\ServerMetry\agent.conf` |
+| **Log file** | `/var/log/servermetry-agent.log` | `C:\ProgramData\ServerMetry\agent.log` |
 | **Scheduler** | crontab (`* * * * *`) | Windows Scheduled Task (every 1 min) |
 | **Runs as** | root (via sudo) | SYSTEM |
 
 The installer:
-1. Detects Python 3.6+
+1. Detects Python 3.8+
 2. Downloads `agent.py` from this repository
 3. Writes the config file with your API URL and key
 4. Registers the scheduler entry
@@ -88,7 +90,7 @@ The installer:
 ### Config file
 
 ```ini
-[serverpulse]
+[servermetry]
 api_url = https://your-api.example.com
 api_key  = sp_live_...
 debug    = false
@@ -98,9 +100,11 @@ debug    = false
 
 | Variable | Description |
 |---|---|
-| `SERVERPULSE_API_URL` | API base URL |
-| `SERVERPULSE_API_KEY` | Server API key |
-| `SERVERPULSE_DEBUG` | Set to `1` to enable debug logging |
+| `SERVERMETRY_API_URL` | API base URL |
+| `SERVERMETRY_API_KEY` | Server API key |
+| `SERVERMETRY_DEBUG` | Set to `1` to enable debug logging |
+
+Legacy `SERVERPULSE_*` names are still accepted.
 
 Environment variables take priority over the config file.
 
@@ -117,20 +121,22 @@ The agent fetches its configuration from `GET /api/v1/agent/config` on every run
 | `reportIntervalSeconds` | Updates the cron / scheduled task interval |
 | `enableAutoUpdates` | Enables automatic agent self-update from GitHub |
 
-All remote config settings can be managed from the **Config tab** in the ServerPulse dashboard.
+All remote config settings can be managed from the **Config tab** in the ServerMetry dashboard.
 
 ---
 
 ## Auto-Update
 
-When `enableAutoUpdates` is `true` in the server config, the agent checks GitHub for a newer version on every run:
+When `enableAutoUpdates` is `true` in the server config, the agent checks for a newer version on every run (at most once per hour):
 
-1. Downloads `agent.py` from this repository
-2. Compares `AGENT_VERSION` with the running version
-3. If newer: backs up the current file (`agent.py.bak`), validates the download (Python syntax check), then replaces in-place
-4. The new version takes effect on the next scheduled run
+1. Resolves the latest version via the [GitHub Releases API](https://api.github.com/repos/FloBaMedia/Monitoring-Client/releases/latest) (falls back to parsing `AGENT_VERSION` from `constants.py` on `main` if the Releases API is unavailable)
+2. Compares it with the running `AGENT_VERSION`
+3. If newer: downloads every agent file from the matching version tag (`vX.Y.Z`, falling back to `main` per-file if a tag is missing a file) into a staging directory
+4. Validates every `.py` file with `ast.parse` — if **any** file fails to fetch or parse, the update is aborted and nothing is changed (no partial update)
+5. Backs up the current agent tree, then atomically swaps in the staged files; on failure, the backup is restored automatically
+6. The new version takes effect on the next scheduled run
 
-If the download fails or is invalid, the agent logs a warning and continues with the current version.
+If the download or validation fails, the agent logs a warning/error and continues running the current version.
 
 ---
 
@@ -205,7 +211,7 @@ agent/
 
 ## Requirements
 
-- Python 3.6 or newer
+- Python 3.8 or newer
 - No external packages — standard library only
 - Root / Administrator privileges for install and for applying system settings (timezone, DNS, NTP)
 
@@ -216,13 +222,13 @@ agent/
 ### Linux / macOS
 
 ```bash
-sudo bash /etc/serverpulse/uninstall.sh
+sudo bash /etc/servermetry/uninstall.sh
 ```
 
 ### Windows (PowerShell, run as Administrator)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\ProgramData\ServerPulse\uninstall-windows.ps1"
+powershell -ExecutionPolicy Bypass -File "C:\ProgramData\ServerMetry\uninstall-windows.ps1"
 ```
 
 ---
@@ -234,7 +240,7 @@ powershell -ExecutionPolicy Bypass -File "C:\ProgramData\ServerPulse\uninstall-w
 3. Test your changes: `bash agent/run-local.sh --dry-run`
 4. Open a pull request
 
-Please maintain the zero-dependency constraint and Python 3.6 compatibility.
+Please maintain the zero-dependency constraint and Python 3.8 compatibility.
 
 ---
 
