@@ -25,6 +25,9 @@ LEGACY_WINDOWS_TASK_NAME = "ServerPulseAgent"
 LINUX_LOG_PATH = "/var/log/servermetry-agent.log"
 LEGACY_LINUX_LOG_PATH = "/var/log/serverpulse-agent.log"
 
+WINDOWS_LOG_PATH = os.path.join(WINDOWS_INSTALL_DIR, "agent.log")
+LEGACY_WINDOWS_LOG_PATH = os.path.join(LEGACY_WINDOWS_INSTALL_DIR, "agent.log")
+
 TEMPLATE_CRON_MARKER = "# servermetry-template-"
 LEGACY_TEMPLATE_CRON_MARKER = "# serverpulse-template-"
 
@@ -69,8 +72,8 @@ def agent_py_path(base_dir=None):
 
 
 def windows_log_path():
-    return os.path.join(WINDOWS_INSTALL_DIR, "agent.log")
+    return WINDOWS_LOG_PATH
 
 
 def legacy_windows_log_path():
-    return os.path.join(LEGACY_WINDOWS_INSTALL_DIR, "agent.log")
+    return LEGACY_WINDOWS_LOG_PATH

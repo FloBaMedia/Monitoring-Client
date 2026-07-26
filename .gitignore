@@ -19,6 +19,14 @@ __pycache__/
 *.log.*
 *.bak
 *.tmp
+.cpu_snap
+.cpu_snap.lock
+.config_state
+.config_state.lock
+.update_check_ts
+.update.lock
+.update_staging/
+.update_backup/
 
 # OS
 .DS_Store

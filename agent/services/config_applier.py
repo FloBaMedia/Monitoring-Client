@@ -22,6 +22,7 @@ from models.paths import (
 from utils.lock import atomic_write
 from utils.logging import log_write
 from utils.validation import (
+    resolve_windows_timezone,
     validate_and_sanitize_dns,
     validate_and_sanitize_interval,
     validate_and_sanitize_ntp,
@@ -56,12 +57,27 @@ def apply_timezone(timezone):
         return False
 
     if platform.system() == "Windows":
+        win_tz = resolve_windows_timezone(tz)
+        if not win_tz:
+            log_write(
+                "WARNING",
+                "No Windows timezone mapping for '{}' – set a Windows ID "
+                "(e.g. 'W. Europe Standard Time') or a known IANA zone".format(tz),
+            )
+            return False
+        # Escape single quotes for PowerShell string literal
+        safe_win_tz = win_tz.replace("'", "''")
         ok, _, err = _run(
-            ["powershell", "-Command", "Set-TimeZone -Id '{}'".format(tz)]
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Set-TimeZone -Id '{}'".format(safe_win_tz)]
         )
-    else:
-        ok, _, err = _run(["timedatectl", "set-timezone", tz])
+        if ok:
+            log_write("INFO", "Timezone set to {} (Windows ID: {})".format(tz, win_tz))
+        else:
+            log_write("WARNING", "Failed to set timezone {} ({}): {}".format(tz, win_tz, err))
+        return ok
 
+    ok, _, err = _run(["timedatectl", "set-timezone", tz])
     if ok:
         log_write("INFO", "Timezone set to {}".format(tz))
     else:
@@ -166,7 +182,9 @@ def apply_dns(custom_dns):
             "| Select-Object -First 1).Name; "
             "Set-DnsClientServerAddress -InterfaceAlias $adapter -ServerAddresses ({})".format(dns_args)
         )
-        ok, _, err = _run(["powershell", "-Command", ps_cmd])
+        ok, _, err = _run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd]
+        )
     else:
         try:
             lines = ["# Managed by ServerMetry Agent\n"]
@@ -220,13 +238,16 @@ def update_schedule(interval_seconds):
             "$t = Get-ScheduledTask -TaskName '{task}' -ErrorAction SilentlyContinue; "
             "if ($t) {{ "
             "  $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) "
-            "    -RepetitionInterval (New-TimeSpan -Minutes {minutes}); "
+            "    -RepetitionInterval (New-TimeSpan -Minutes {minutes}) "
+            "    -RepetitionDuration (New-TimeSpan -Days 9999); "
             "  Set-ScheduledTask -TaskName '{task}' -Trigger $trigger | Out-Null; "
             "  Write-Output 'updated'; "
             "}} else {{ Write-Output 'not_found'; }}"
         ).format(task=task_name, minutes=interval_minutes)
 
-        ok, stdout, err = _run(["powershell", "-Command", ps_cmd])
+        ok, stdout, err = _run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd]
+        )
         if "updated" in stdout:
             log_write("INFO", "Scheduled task interval updated to {} minutes".format(interval_minutes))
             return True

@@ -1,27 +1,27 @@
-"""File locking with stale detection for ServerPulse Agent."""
+"""File locking with stale detection for ServerMetry Agent."""
 
 import json
 import os
 import platform
-import signal
 import subprocess
 import time
 
 from models.limits import LOCK_MAX_AGE_SECONDS, LOCK_RETRY_SECONDS, LOCK_RETRY_MAX
 
 
-def _pid_alive(pid: int) -> bool:
+def _pid_alive(pid):
     if pid <= 0:
         return False
     try:
         if platform.system() == "Windows":
             result = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"],
-                capture_output=True,
-                text=True,
+                ["tasklist", "/FI", "PID eq {}".format(pid)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
                 timeout=5,
             )
-            return str(pid) in result.stdout
+            return str(pid) in (result.stdout or "")
         else:
             os.kill(pid, 0)
             return True
@@ -29,7 +29,7 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _our_pid() -> int:
+def _our_pid():
     try:
         return os.getpid()
     except Exception:
@@ -37,12 +37,12 @@ def _our_pid() -> int:
 
 
 class FileLock:
-    def __init__(self, lock_path: str, timeout: int = LOCK_MAX_AGE_SECONDS):
+    def __init__(self, lock_path, timeout=LOCK_MAX_AGE_SECONDS):
         self.lock_path = lock_path
         self.timeout = timeout
         self._acquired = False
 
-    def acquire(self, blocking: bool = True, retry_count: int = LOCK_RETRY_MAX) -> bool:
+    def acquire(self, blocking=True, retry_count=LOCK_RETRY_MAX):
         start = time.time()
         attempt = 0
 
@@ -68,7 +68,7 @@ class FileLock:
 
         return False
 
-    def _try_acquire(self) -> bool:
+    def _try_acquire(self):
         now = time.time()
 
         if os.path.exists(self.lock_path):
@@ -117,7 +117,7 @@ class FileLock:
         return False
 
 
-def atomic_write(path: str, content: str, encoding: str = "utf-8"):
+def atomic_write(path, content, encoding="utf-8"):
     dir_path = os.path.dirname(path) if path else "."
     import tempfile
     fd, tmp = tempfile.mkstemp(dir=dir_path if dir_path else ".", suffix=".tmp")
