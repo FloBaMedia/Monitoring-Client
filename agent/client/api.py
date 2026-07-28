@@ -13,24 +13,31 @@ from models.limits import API_POST_TIMEOUT, API_GET_TIMEOUT, API_TEMPLATE_TIMEOU
 
 
 def _sanitize_payload(payload):
+    """Normalize payload for JSON + Zod: drop null/NaN/Inf keys (optional ≠ null)."""
     if not isinstance(payload, dict):
         return payload
     result = {}
     for k, v in payload.items():
+        if v is None:
+            continue
         if isinstance(v, float):
             if math.isnan(v) or math.isinf(v):
-                result[k] = None
-            else:
-                result[k] = v
+                continue
+            result[k] = v
         elif isinstance(v, dict):
             result[k] = _sanitize_payload(v)
         elif isinstance(v, list):
-            result[k] = [
-                _sanitize_payload(item) if isinstance(item, dict) else (
-                    None if isinstance(item, (float)) and (math.isnan(item) or math.isinf(item)) else item
-                )
-                for item in v
-            ]
+            cleaned = []
+            for item in v:
+                if isinstance(item, dict):
+                    cleaned.append(_sanitize_payload(item))
+                elif isinstance(item, float) and (math.isnan(item) or math.isinf(item)):
+                    continue
+                elif item is None:
+                    continue
+                else:
+                    cleaned.append(item)
+            result[k] = cleaned
         else:
             result[k] = v
     return result
