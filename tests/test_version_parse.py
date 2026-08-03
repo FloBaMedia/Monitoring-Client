@@ -10,6 +10,7 @@ import io
 import json
 import os
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -17,7 +18,9 @@ _AGENT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 if _AGENT_DIR not in sys.path:
     sys.path.insert(0, _AGENT_DIR)
 
+from models.constants import AGENT_VERSION  # noqa: E402
 from services.updater import (  # noqa: E402
+    UPDATE_CHECK_INTERVAL,
     _parse_version,
     _resolve_latest_version,
     _version_tuple,
@@ -121,6 +124,29 @@ class TestUpdateStatus(unittest.TestCase):
             text = out.getvalue()
         self.assertIn("enabled", text)
         self.assertIn("on next metric report", text)
+
+    def test_overdue_equal_cache_does_not_claim_up_to_date(self):
+        # Stale cache equal to installed version previously printed "up to date"
+        # while --check-update (live) could already show a newer release.
+        stale_ts = time.time() - (UPDATE_CHECK_INTERVAL + 100)
+        with mock.patch("services.updater._read_last_check_ts", return_value=stale_ts), \
+             mock.patch("services.updater._read_last_remote_version", return_value=AGENT_VERSION), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            update_status(auto_updates_enabled=True)
+            text = out.getvalue()
+        self.assertIn("stale — run --check-update", text)
+        self.assertNotIn("(up to date)", text)
+        self.assertIn("overdue", text)
+
+    def test_fresh_equal_cache_claims_up_to_date(self):
+        fresh_ts = time.time() - 60
+        with mock.patch("services.updater._read_last_check_ts", return_value=fresh_ts), \
+             mock.patch("services.updater._read_last_remote_version", return_value=AGENT_VERSION), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            update_status(auto_updates_enabled=True)
+            text = out.getvalue()
+        self.assertIn("(up to date)", text)
+        self.assertNotIn("stale", text)
 
 
 if __name__ == "__main__":

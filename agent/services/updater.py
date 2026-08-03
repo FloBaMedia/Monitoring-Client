@@ -246,21 +246,36 @@ def _resolve_latest_version(log_fn=None):
 
 
 def update_status(auto_updates_enabled=None):
-    """Print auto-update schedule status. No network requests."""
+    """Print auto-update schedule status. No network requests.
+
+    "Latest" is the version remembered from the last successful check
+    (``.update_check_ts``), not a live GitHub lookup — use ``--check-update``
+    for that. When the check is overdue we never claim "up to date" from stale
+    cache, which previously contradicted a live ``--check-update``.
+    """
     import datetime
 
     last_ts = _read_last_check_ts()
     last_remote = _read_last_remote_version()
     now = time.time()
+    overdue = last_ts > 0.0 and (now - last_ts) >= UPDATE_CHECK_INTERVAL
 
     print("Auto-Update Status")
     print("  Version         : v{}".format(AGENT_VERSION))
-    if last_remote and last_remote != AGENT_VERSION:
-        print("  Latest          : v{} (update available)".format(last_remote))
-    elif last_remote:
-        print("  Latest          : v{} (up to date)".format(last_remote))
-    else:
+    if not last_remote:
         print("  Latest          : unknown (not yet checked)")
+    elif _version_tuple(last_remote) > _version_tuple(AGENT_VERSION):
+        print("  Latest          : v{} (update available)".format(last_remote))
+    elif overdue:
+        # Cache says equal/older but the check itself is stale — do not claim
+        # "up to date" (live GitHub may already be newer; see --check-update).
+        print(
+            "  Latest          : v{} (from last check; stale — run --check-update)".format(
+                last_remote
+            )
+        )
+    else:
+        print("  Latest          : v{} (up to date)".format(last_remote))
 
     if auto_updates_enabled is not None:
         print("  Auto-updates    : {}".format("enabled" if auto_updates_enabled else "disabled"))
