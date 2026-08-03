@@ -6,15 +6,23 @@ consistent with the zero-dependency agent install.
 Run with:  python -m unittest discover -s tests
 """
 
+import io
+import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 _AGENT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent")
 if _AGENT_DIR not in sys.path:
     sys.path.insert(0, _AGENT_DIR)
 
-from services.updater import _parse_version, _version_tuple  # noqa: E402
+from services.updater import (  # noqa: E402
+    _parse_version,
+    _resolve_latest_version,
+    _version_tuple,
+    update_status,
+)
 
 
 class TestParseVersion(unittest.TestCase):
@@ -55,6 +63,64 @@ class TestVersionTuple(unittest.TestCase):
 
     def test_equal_versions_are_equal(self):
         self.assertEqual(_version_tuple("1.4.1"), _version_tuple("1.4.1"))
+
+
+class TestResolveLatestVersion(unittest.TestCase):
+    def test_returns_higher_of_release_and_main(self):
+        release_body = json.dumps({"tag_name": "v1.4.1"})
+        main_body = 'AGENT_VERSION = "1.4.3"\n'
+
+        with mock.patch("services.updater._fetch_with_status", return_value=(200, release_body)), \
+             mock.patch("services.updater._fetch", return_value=(True, main_body)):
+            self.assertEqual(_resolve_latest_version(), "1.4.3")
+
+    def test_returns_release_when_newer_than_main(self):
+        release_body = json.dumps({"tag_name": "v1.5.0"})
+        main_body = 'AGENT_VERSION = "1.4.3"\n'
+
+        with mock.patch("services.updater._fetch_with_status", return_value=(200, release_body)), \
+             mock.patch("services.updater._fetch", return_value=(True, main_body)):
+            self.assertEqual(_resolve_latest_version(), "1.5.0")
+
+    def test_falls_back_to_main_when_releases_fail(self):
+        main_body = 'AGENT_VERSION = "1.4.3"\n'
+
+        with mock.patch("services.updater._fetch_with_status", return_value=(404, "")), \
+             mock.patch("services.updater._fetch", return_value=(True, main_body)):
+            self.assertEqual(_resolve_latest_version(), "1.4.3")
+
+    def test_falls_back_to_release_when_main_fails(self):
+        release_body = json.dumps({"tag_name": "v1.4.1"})
+
+        with mock.patch("services.updater._fetch_with_status", return_value=(200, release_body)), \
+             mock.patch("services.updater._fetch", return_value=(False, "")):
+            self.assertEqual(_resolve_latest_version(), "1.4.1")
+
+    def test_returns_none_when_both_fail(self):
+        with mock.patch("services.updater._fetch_with_status", return_value=(None, "")), \
+             mock.patch("services.updater._fetch", return_value=(False, "")):
+            self.assertIsNone(_resolve_latest_version())
+
+
+class TestUpdateStatus(unittest.TestCase):
+    def test_disabled_does_not_claim_next_metric_report(self):
+        with mock.patch("services.updater._read_last_check_ts", return_value=0.0), \
+             mock.patch("services.updater._read_last_remote_version", return_value=None), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            update_status(auto_updates_enabled=False)
+            text = out.getvalue()
+        self.assertIn("disabled", text)
+        self.assertIn("will not run until auto-updates are enabled", text)
+        self.assertNotIn("on next metric report", text)
+
+    def test_enabled_keeps_next_metric_report_when_never_checked(self):
+        with mock.patch("services.updater._read_last_check_ts", return_value=0.0), \
+             mock.patch("services.updater._read_last_remote_version", return_value=None), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            update_status(auto_updates_enabled=True)
+            text = out.getvalue()
+        self.assertIn("enabled", text)
+        self.assertIn("on next metric report", text)
 
 
 if __name__ == "__main__":

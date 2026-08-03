@@ -1,12 +1,12 @@
 """
 ServerMetry Agent self-updater.
 
-Resolves the latest released version (preferring the GitHub Releases API,
-falling back to parsing AGENT_VERSION out of constants.py on `main`), stages
-every file from the matching version tag in a temp directory, validates all
-Python files with ast.parse, and only swaps the staged files into place if
-everything fetched and validated cleanly. The previous tree is backed up
-first and restored automatically if the swap fails.
+Resolves the latest available version from both the GitHub Releases API and
+AGENT_VERSION on `main` (whichever is higher), stages every file from the
+matching version tag in a temp directory, validates all Python files with
+ast.parse, and only swaps the staged files into place if everything fetched
+and validated cleanly. The previous tree is backed up first and restored
+automatically if the swap fails.
 """
 
 import ast
@@ -189,11 +189,15 @@ def _write_last_check_ts(remote_version=None):
 
 def _resolve_latest_version(log_fn=None):
     """
-    Determine the latest available version string, preferring the GitHub
-    Releases API (`tag_name`, e.g. "v1.4.1") and falling back to parsing
-    AGENT_VERSION out of constants.py on `main` if the API call fails.
+    Determine the latest available version by checking BOTH the GitHub
+    Releases API (`tag_name`, e.g. "v1.4.1") and AGENT_VERSION in
+    constants.py on `main`, then returning the higher semver. If one
+    source fails, the other is used alone.
     Returns the version string (without leading "v") or None.
     """
+    release_version = None
+    main_version = None
+
     if log_fn:
         log_fn("Fetching latest release info from {}".format(GITHUB_RELEASES_LATEST_URL))
 
@@ -206,19 +210,39 @@ def _resolve_latest_version(log_fn=None):
             tag = ""
         version = tag[1:] if tag.startswith("v") else tag
         if version and re.match(r"^\d+(\.\d+)*$", version):
-            return version
-        if log_fn:
-            log_fn("Auto-update: releases API returned no usable tag_name, falling back to main")
+            release_version = version
+        elif log_fn:
+            log_fn("Auto-update: releases API returned no usable tag_name")
     elif log_fn:
-        log_fn("Auto-update: releases API unavailable (HTTP {}), falling back to main".format(status))
+        log_fn("Auto-update: releases API unavailable (HTTP {})".format(status))
 
     version_url = "{}?t={}".format(GITHUB_MAIN_VERSION_URL, int(time.time()))
     if log_fn:
         log_fn("Auto-update: fetching version from {}".format(version_url))
     ok, version_content = _fetch(version_url)
-    if not ok or not version_content:
-        return None
-    return _parse_version(version_content)
+    if ok and version_content:
+        main_version = _parse_version(version_content)
+    elif log_fn:
+        log_fn("Auto-update: could not fetch version from main")
+
+    if release_version and main_version:
+        if _version_tuple(main_version) > _version_tuple(release_version):
+            if log_fn:
+                log_fn(
+                    "Auto-update: main (v{}) is newer than release (v{})".format(
+                        main_version, release_version
+                    )
+                )
+            return main_version
+        if log_fn:
+            log_fn(
+                "Auto-update: using release v{} (main is v{})".format(
+                    release_version, main_version
+                )
+            )
+        return release_version
+
+    return release_version or main_version
 
 
 def update_status(auto_updates_enabled=None):
@@ -241,7 +265,14 @@ def update_status(auto_updates_enabled=None):
     if auto_updates_enabled is not None:
         print("  Auto-updates    : {}".format("enabled" if auto_updates_enabled else "disabled"))
 
-    if last_ts == 0.0:
+    if auto_updates_enabled is False:
+        if last_ts == 0.0:
+            print("  Last check      : never")
+        else:
+            last_dt = datetime.datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M:%S")
+            print("  Last check      : {}".format(last_dt))
+        print("  Next check      : will not run until auto-updates are enabled")
+    elif last_ts == 0.0:
         print("  Last check      : never")
         print("  Next check      : on next metric report")
     else:

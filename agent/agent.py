@@ -354,8 +354,9 @@ def main():
         except ImportError:
             print("ERROR: services/updater.py is missing. Run with --update to bootstrap.")
             sys.exit(1)
-        auto_updates = values.get("enable_auto_updates")
-        update_status(auto_updates_enabled=auto_updates if auto_updates is not None else None)
+        _, cached_config, _ = _load_config_state()
+        auto_updates = cached_config.get("enableAutoUpdates") if cached_config else None
+        update_status(auto_updates_enabled=auto_updates)
         sys.exit(0)
 
     if check_update or force_update:
@@ -490,7 +491,8 @@ def main():
     if not ok:
         log_write("ERROR", "Failed to post metrics: {}".format(post_err))
 
-    if ok and not no_apply_config and config_changed_at != stored_changed_at:
+    # Bootstrap when no local cache yet (both sides may be None/null), or when timestamps differ.
+    if ok and not no_apply_config and (stored_changed_at is None or config_changed_at != stored_changed_at):
         from client.api import get_config
         from services.config_applier import apply_config
 
@@ -513,7 +515,8 @@ def main():
     if not no_apply_config:
         config_lock.release()
 
-    if ok and not no_apply_config and remote_config.get("enableAutoUpdates"):
+    # Product default is enabled (opt-out): run unless explicitly False.
+    if ok and not no_apply_config and remote_config.get("enableAutoUpdates") is not False:
         from services.updater import check_and_update
         check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
 
