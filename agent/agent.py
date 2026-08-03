@@ -85,12 +85,18 @@ _CONFIG_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".c
 
 
 def _load_config_state():
+    """Return (configChangedAt, config, services, loaded).
+
+    ``loaded`` is True when a state file was read successfully — even if the
+    cached config dict is empty or configChangedAt is null. Callers must use
+    that flag for bootstrap, not truthiness of ``config``.
+    """
     try:
         with open(_CONFIG_STATE_FILE, "r", encoding=STATE_ENCODING) as f:
             data = json.load(f)
-        return data.get("configChangedAt"), data.get("config", {}), data.get("services", [])
+        return data.get("configChangedAt"), data.get("config", {}), data.get("services", []), True
     except Exception:
-        return None, {}, []
+        return None, {}, [], False
 
 
 def _save_config_state(config_changed_at, config_dict, services=None):
@@ -329,7 +335,7 @@ def main():
         sys.exit(0)
 
     if config_status:
-        stored_changed_at, remote_config, stored_services = _load_config_state()
+        stored_changed_at, remote_config, stored_services, _ = _load_config_state()
         print("ServerMetry Agent — Config Status")
         print("")
         print("Local config ({})".format(conf_path or "env vars"))
@@ -354,7 +360,7 @@ def main():
         except ImportError:
             print("ERROR: services/updater.py is missing. Run with --update to bootstrap.")
             sys.exit(1)
-        _, cached_config, _ = _load_config_state()
+        _, cached_config, _, _ = _load_config_state()
         auto_updates = cached_config.get("enableAutoUpdates") if cached_config else None
         update_status(auto_updates_enabled=auto_updates)
         sys.exit(0)
@@ -443,7 +449,10 @@ def main():
         log_write("WARNING", "Config state locked by another process, skipping config update")
         no_apply_config = True
 
-    stored_changed_at, remote_config, stored_services = (None, {}, []) if (dry_run or no_apply_config) else _load_config_state()
+    if dry_run or no_apply_config:
+        stored_changed_at, remote_config, stored_services, config_state_loaded = None, {}, [], False
+    else:
+        stored_changed_at, remote_config, stored_services, config_state_loaded = _load_config_state()
 
     _system = platform.system()
     if _system == "Windows":
@@ -491,16 +500,16 @@ def main():
     if not ok:
         log_write("ERROR", "Failed to post metrics: {}".format(post_err))
 
-    # Bootstrap only when we have no cached config yet (empty remote_config),
-    # or when the server timestamp differs from what we last stored. Do NOT key
-    # solely on stored_changed_at is None — a successful fetch can persist a
-    # null configChangedAt (older APIs) and would otherwise refetch forever.
-    needs_config_fetch = (not remote_config) or (config_changed_at != stored_changed_at)
+    # Bootstrap when no state file exists yet, or when the server timestamp
+    # differs from what we last stored. Key off config_state_loaded (file read
+    # ok), not truthiness of remote_config / stored_changed_at — empty config
+    # or a null timestamp after a successful fetch must not refetch forever.
+    needs_config_fetch = (not config_state_loaded) or (config_changed_at != stored_changed_at)
     if ok and not no_apply_config and needs_config_fetch:
         from client.api import get_config
         from services.config_applier import apply_config
 
-        if not remote_config:
+        if not config_state_loaded:
             log_debug("No cached config — fetching for the first time", debug_flag=DEBUG)
         else:
             log_debug("Config changed on server — re-fetching", debug_flag=DEBUG)
@@ -508,11 +517,14 @@ def main():
         config_ok, fetched_config, fetched_services = get_config(
             api_url, api_key, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
         )
-        if config_ok and fetched_config:
-            apply_config(fetched_config, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
-            remote_config = fetched_config
-            stored_services = fetched_services
-            _save_config_state(config_changed_at, remote_config, fetched_services)
+        if config_ok:
+            # Persist even if config is empty/None so bootstrap does not loop.
+            remote_config = fetched_config if isinstance(fetched_config, dict) else {}
+            stored_services = fetched_services if isinstance(fetched_services, list) else []
+            if remote_config:
+                apply_config(remote_config, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+            _save_config_state(config_changed_at, remote_config, stored_services)
+            config_state_loaded = True
         else:
             log_debug("Could not fetch config from server", debug_flag=DEBUG)
 
