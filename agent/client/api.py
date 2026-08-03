@@ -125,8 +125,14 @@ def post_metrics(api_url, api_key, metrics, log_debug_fn=None):
     config_changed_at = data.get("configChangedAt") if isinstance(data, dict) else None
     commands = data.get("commands", []) if isinstance(data, dict) else []
     # Older APIs omit the field — keep None so the caller can fall back to cache.
+    # JSON null must also stay None (bool(None) is False and would wrongly disable
+    # updates); only an explicit boolean false should turn auto-updates off.
     if isinstance(data, dict) and "enableAutoUpdates" in data:
-        enable_auto_updates = bool(data.get("enableAutoUpdates"))
+        raw_flag = data.get("enableAutoUpdates")
+        if raw_flag is None:
+            enable_auto_updates = None
+        else:
+            enable_auto_updates = bool(raw_flag)
     else:
         enable_auto_updates = None
     return True, config_changed_at, enable_auto_updates, commands, None
