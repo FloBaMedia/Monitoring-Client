@@ -29,7 +29,7 @@ Lightweight monitoring agent for [ServerMetry](https://github.com/FloBaMedia/Mon
 
 ```bash
 # 1. Download the installer
-curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh -o /tmp/install.sh
+curl -fsSL https://raw.githubusercontent.com/FloBaMedia/servermetry-client/main/agent/install.sh -o /tmp/install.sh
 
 # 2. Review the script before running
 cat /tmp/install.sh
@@ -42,7 +42,7 @@ SERVERMETRY_URL=https://your-api.example.com SERVERMETRY_KEY=sp_live_... sudo /t
 Or interactive (prompts for API URL and key):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh -o /tmp/install.sh
+curl -fsSL https://raw.githubusercontent.com/FloBaMedia/servermetry-client/main/agent/install.sh -o /tmp/install.sh
 chmod +x /tmp/install.sh
 sudo /tmp/install.sh
 ```
@@ -51,7 +51,7 @@ sudo /tmp/install.sh
 
 ```powershell
 # 1. Download the installer
-Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install-windows.ps1' -OutFile $env:TEMP\install-servermetry.ps1
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FloBaMedia/servermetry-client/main/agent/install-windows.ps1' -OutFile $env:TEMP\install-servermetry.ps1
 
 # 2. Review the script before running
 Get-Content $env:TEMP\install-servermetry.ps1
@@ -129,7 +129,7 @@ All remote config settings can be managed from the **Config tab** in the ServerM
 
 When `enableAutoUpdates` is `true` in the server config, the agent checks for a newer version on every run (at most once per hour):
 
-1. Resolves the latest version via the [GitHub Releases API](https://api.github.com/repos/FloBaMedia/Monitoring-Client/releases/latest) (falls back to parsing `AGENT_VERSION` from `constants.py` on `main` if the Releases API is unavailable)
+1. Resolves the latest version via the [GitHub Releases API](https://api.github.com/repos/FloBaMedia/servermetry-client/releases/latest) (falls back to parsing `AGENT_VERSION` from `constants.py` on `main` if the Releases API is unavailable)
 2. Compares it with the running `AGENT_VERSION`
 3. If newer: downloads every agent file from the matching version tag (`vX.Y.Z`, falling back to `main` per-file if a tag is missing a file) into a staging directory
 4. Validates every `.py` file with `ast.parse` — if **any** file fails to fetch or parse, the update is aborted and nothing is changed (no partial update)
@@ -157,8 +157,8 @@ python agent.py --debug                 # verbose logging to stderr
 
 ```bash
 # Clone
-git clone https://github.com/FloBaMedia/Monitoring-Client.git
-cd Monitoring-Client/agent
+git clone https://github.com/FloBaMedia/servermetry-client.git
+cd servermetry-client/agent
 
 # Single dry run (no HTTP)
 bash run-local.sh --dry-run

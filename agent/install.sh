@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ServerMetry Agent Installer for Linux
-# Usage: curl -fsSL https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/FloBaMedia/servermetry-client/main/agent/install.sh | bash
 set -euo pipefail
 
-GITHUB_BASE="https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
+GITHUB_BASE="https://raw.githubusercontent.com/FloBaMedia/servermetry-client/main/agent"
 INSTALL_DIR="/etc/servermetry"
 AGENT_PATH="$INSTALL_DIR/agent.py"
 CONF_PATH="$INSTALL_DIR/agent.conf"

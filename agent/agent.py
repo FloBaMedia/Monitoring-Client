@@ -14,7 +14,7 @@ def _bootstrap():
     import ssl
     import urllib.request
 
-    _BOOTSTRAP_BASE = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
+    _BOOTSTRAP_BASE = "https://raw.githubusercontent.com/FloBaMedia/servermetry-client/main/agent"
     _BOOTSTRAP_FILES = [
         "client/__init__.py",
         "client/api.py",
@@ -365,7 +365,7 @@ def main():
             print(
                 "ERROR: services/updater.py is missing. Run:\n"
                 "  curl -o /etc/servermetry/services/updater.py "
-                "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent/services/updater.py"
+                "https://raw.githubusercontent.com/FloBaMedia/servermetry-client/main/agent/services/updater.py"
             )
             sys.exit(1)
 
