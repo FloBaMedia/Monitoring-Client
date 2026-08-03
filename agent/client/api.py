@@ -110,17 +110,26 @@ def _request(method, base_url, path, api_key, body=None, timeout=10, log_debug_f
 
 
 def post_metrics(api_url, api_key, metrics, log_debug_fn=None):
-    """Returns (ok, config_changed_at, commands, err). err is None on success."""
+    """Returns (ok, config_changed_at, enable_auto_updates, commands, err).
+
+    enable_auto_updates is the live server flag from the metrics response when
+    present, otherwise None (older API). err is None on success.
+    """
     ok, result, err = _request(
         "POST", api_url, "api/v1/agent/metrics", api_key, metrics,
         timeout=API_POST_TIMEOUT, log_debug_fn=log_debug_fn, retries=2,
     )
     if not ok:
-        return False, None, [], err
+        return False, None, None, [], err
     data = result.get("data", {}) if isinstance(result, dict) else {}
     config_changed_at = data.get("configChangedAt") if isinstance(data, dict) else None
     commands = data.get("commands", []) if isinstance(data, dict) else []
-    return True, config_changed_at, commands, None
+    # Older APIs omit the field — keep None so the caller can fall back to cache.
+    if isinstance(data, dict) and "enableAutoUpdates" in data:
+        enable_auto_updates = bool(data.get("enableAutoUpdates"))
+    else:
+        enable_auto_updates = None
+    return True, config_changed_at, enable_auto_updates, commands, None
 
 
 def get_config(api_url, api_key, log_debug_fn=None):

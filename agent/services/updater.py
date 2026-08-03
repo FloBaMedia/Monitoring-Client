@@ -472,6 +472,9 @@ def check_and_update(log_debug_fn=None, force=False):
         remote_version = _resolve_latest_version(log_fn=log_debug_fn)
         if not remote_version:
             log_write("WARNING", "Auto-update: could not resolve latest version – skipping")
+            # Still advance the interval so a failing resolve cannot hammer
+            # GitHub on every metric report (unauthenticated rate limit: 60/h).
+            _write_last_check_ts()
             return "skipped"
 
         if log_debug_fn:
@@ -493,19 +496,17 @@ def check_and_update(log_debug_fn=None, force=False):
 
         result = _stage_and_apply_update(remote_version, log_debug_fn=log_debug_fn)
 
+        # Always record that we attempted this remote version (success or not).
+        # That keeps --update-status honest ("update available") and enforces the
+        # 1h interval so failed applies/network blips do not retry every minute.
+        _write_last_check_ts(remote_version=remote_version)
+
         if result == "updated":
-            _write_last_check_ts(remote_version=remote_version)
             try:
                 from services.path_migration import migrate_install_paths
                 migrate_install_paths()
             except Exception as e:
                 log_write("WARNING", "Auto-update: path migration skipped: {}".format(e))
-        else:
-            # Fetch/validate/apply failures are typically transient (network,
-            # not-yet-propagated tag) — don't write the timestamp so the next
-            # scheduled run retries. Permission errors are the one exception
-            # already handled with their own log message above.
-            pass
 
         return result
     finally:

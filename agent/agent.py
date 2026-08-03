@@ -485,7 +485,7 @@ def main():
         sys.exit(0)
 
     from client.api import post_metrics
-    ok, config_changed_at, commands, post_err = post_metrics(
+    ok, config_changed_at, enable_auto_updates, commands, post_err = post_metrics(
         api_url, api_key, metrics, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
     )
     if not ok:
@@ -515,8 +515,12 @@ def main():
     if not no_apply_config:
         config_lock.release()
 
-    # Product default is enabled (opt-out): run unless explicitly False.
-    if ok and not no_apply_config and remote_config.get("enableAutoUpdates") is not False:
+    # Prefer the live metrics flag (fresh every report). Fall back to cached
+    # config for older APIs. Product default is enabled (opt-out): run unless
+    # explicitly False.
+    if enable_auto_updates is None:
+        enable_auto_updates = remote_config.get("enableAutoUpdates")
+    if ok and not no_apply_config and enable_auto_updates is not False:
         from services.updater import check_and_update
         check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
 

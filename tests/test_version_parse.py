@@ -149,5 +149,39 @@ class TestUpdateStatus(unittest.TestCase):
         self.assertNotIn("stale", text)
 
 
+class TestCheckAndUpdateBackoff(unittest.TestCase):
+    def test_resolve_failure_advances_interval(self):
+        import tempfile
+        from services import updater as u
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, ".update_check_ts")
+            lock = os.path.join(tmp, ".update.lock")
+            with mock.patch.object(u, "_state_path", return_value=state), \
+                 mock.patch.object(u, "_lock_path", return_value=lock), \
+                 mock.patch.object(u, "_resolve_latest_version", return_value=None):
+                result = u.check_and_update(force=True)
+                self.assertEqual(result, "skipped")
+                data = json.loads(open(state).read())
+                self.assertGreater(data["ts"], 0)
+
+    def test_failed_apply_still_records_remote_version(self):
+        import tempfile
+        from services import updater as u
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, ".update_check_ts")
+            lock = os.path.join(tmp, ".update.lock")
+            with mock.patch.object(u, "_state_path", return_value=state), \
+                 mock.patch.object(u, "_lock_path", return_value=lock), \
+                 mock.patch.object(u, "_resolve_latest_version", return_value="9.9.9"), \
+                 mock.patch.object(u, "_stage_and_apply_update", return_value="skipped"):
+                result = u.check_and_update(force=True)
+                self.assertEqual(result, "skipped")
+                data = json.loads(open(state).read())
+                self.assertEqual(data["remote_version"], "9.9.9")
+                self.assertGreater(data["ts"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
