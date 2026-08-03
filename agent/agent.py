@@ -94,7 +94,13 @@ def _load_config_state():
     try:
         with open(_CONFIG_STATE_FILE, "r", encoding=STATE_ENCODING) as f:
             data = json.load(f)
-        return data.get("configChangedAt"), data.get("config", {}), data.get("services", []), True
+        config = data.get("config") or {}
+        if not isinstance(config, dict):
+            config = {}
+        services = data.get("services") or []
+        if not isinstance(services, list):
+            services = []
+        return data.get("configChangedAt"), config, services, True
     except Exception:
         return None, {}, [], False
 
