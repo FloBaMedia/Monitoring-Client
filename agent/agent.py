@@ -85,12 +85,24 @@ _CONFIG_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".c
 
 
 def _load_config_state():
+    """Return (configChangedAt, config, services, loaded).
+
+    ``loaded`` is True when a state file was read successfully — even if the
+    cached config dict is empty or configChangedAt is null. Callers must use
+    that flag for bootstrap, not truthiness of ``config``.
+    """
     try:
         with open(_CONFIG_STATE_FILE, "r", encoding=STATE_ENCODING) as f:
             data = json.load(f)
-        return data.get("configChangedAt"), data.get("config", {}), data.get("services", [])
+        config = data.get("config") or {}
+        if not isinstance(config, dict):
+            config = {}
+        services = data.get("services") or []
+        if not isinstance(services, list):
+            services = []
+        return data.get("configChangedAt"), config, services, True
     except Exception:
-        return None, {}, []
+        return None, {}, [], False
 
 
 def _save_config_state(config_changed_at, config_dict, services=None):
@@ -329,16 +341,18 @@ def main():
         sys.exit(0)
 
     if config_status:
-        stored_changed_at, remote_config, stored_services = _load_config_state()
+        stored_changed_at, remote_config, stored_services, config_state_loaded = _load_config_state()
         print("ServerMetry Agent — Config Status")
         print("")
         print("Local config ({})".format(conf_path or "env vars"))
         print("  API URL:      {}".format(values.get("api_url", DEFAULT_API_URL)))
         print("  Server ID:    {}".format(values.get("server_id", "(not set)")))
         print("")
-        if remote_config:
+        if config_state_loaded:
+            # Match runtime gate: missing enableAutoUpdates => enabled (opt-out).
+            auto_updates_on = remote_config.get("enableAutoUpdates") is not False
             print("Server config (last fetched: {})".format(stored_changed_at or "unknown"))
-            print("  Auto-updates: {}".format("enabled" if remote_config.get("enableAutoUpdates") else "disabled"))
+            print("  Auto-updates: {}".format("enabled" if auto_updates_on else "disabled"))
             print("  Report every: {}s".format(remote_config.get("reportIntervalSeconds", 60)))
             print("  Timezone:     {}".format(remote_config.get("timezone") or "(not set)"))
             print("  Locale:       {}".format(remote_config.get("locale") or "(not set)"))
@@ -354,8 +368,13 @@ def main():
         except ImportError:
             print("ERROR: services/updater.py is missing. Run with --update to bootstrap.")
             sys.exit(1)
-        auto_updates = values.get("enable_auto_updates")
-        update_status(auto_updates_enabled=auto_updates if auto_updates is not None else None)
+        _, cached_config, _, config_state_loaded = _load_config_state()
+        if config_state_loaded:
+            # Match runtime: missing key => enabled; only explicit False disables.
+            auto_updates = cached_config.get("enableAutoUpdates") is not False
+        else:
+            auto_updates = None
+        update_status(auto_updates_enabled=auto_updates)
         sys.exit(0)
 
     if check_update or force_update:
@@ -442,7 +461,10 @@ def main():
         log_write("WARNING", "Config state locked by another process, skipping config update")
         no_apply_config = True
 
-    stored_changed_at, remote_config, stored_services = (None, {}, []) if (dry_run or no_apply_config) else _load_config_state()
+    if dry_run or no_apply_config:
+        stored_changed_at, remote_config, stored_services, config_state_loaded = None, {}, [], False
+    else:
+        stored_changed_at, remote_config, stored_services, config_state_loaded = _load_config_state()
 
     _system = platform.system()
     if _system == "Windows":
@@ -484,17 +506,22 @@ def main():
         sys.exit(0)
 
     from client.api import post_metrics
-    ok, config_changed_at, commands, post_err = post_metrics(
+    ok, config_changed_at, enable_auto_updates, commands, post_err = post_metrics(
         api_url, api_key, metrics, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
     )
     if not ok:
         log_write("ERROR", "Failed to post metrics: {}".format(post_err))
 
-    if ok and not no_apply_config and config_changed_at != stored_changed_at:
+    # Bootstrap when no state file exists yet, or when the server timestamp
+    # differs from what we last stored. Key off config_state_loaded (file read
+    # ok), not truthiness of remote_config / stored_changed_at — empty config
+    # or a null timestamp after a successful fetch must not refetch forever.
+    needs_config_fetch = (not config_state_loaded) or (config_changed_at != stored_changed_at)
+    if ok and not no_apply_config and needs_config_fetch:
         from client.api import get_config
         from services.config_applier import apply_config
 
-        if stored_changed_at is None:
+        if not config_state_loaded:
             log_debug("No cached config — fetching for the first time", debug_flag=DEBUG)
         else:
             log_debug("Config changed on server — re-fetching", debug_flag=DEBUG)
@@ -502,18 +529,26 @@ def main():
         config_ok, fetched_config, fetched_services = get_config(
             api_url, api_key, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG)
         )
-        if config_ok and fetched_config:
-            apply_config(fetched_config, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
-            remote_config = fetched_config
-            stored_services = fetched_services
-            _save_config_state(config_changed_at, remote_config, fetched_services)
+        if config_ok:
+            # Persist even if config is empty/None so bootstrap does not loop.
+            remote_config = fetched_config if isinstance(fetched_config, dict) else {}
+            stored_services = fetched_services if isinstance(fetched_services, list) else []
+            if remote_config:
+                apply_config(remote_config, log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
+            _save_config_state(config_changed_at, remote_config, stored_services)
+            config_state_loaded = True
         else:
             log_debug("Could not fetch config from server", debug_flag=DEBUG)
 
     if not no_apply_config:
         config_lock.release()
 
-    if ok and not no_apply_config and remote_config.get("enableAutoUpdates"):
+    # Prefer the live metrics flag (fresh every report). Fall back to cached
+    # config for older APIs. Product default is enabled (opt-out): run unless
+    # explicitly False.
+    if enable_auto_updates is None:
+        enable_auto_updates = remote_config.get("enableAutoUpdates")
+    if ok and not no_apply_config and enable_auto_updates is not False:
         from services.updater import check_and_update
         check_and_update(log_debug_fn=lambda msg: log_debug(msg, debug_flag=DEBUG))
 

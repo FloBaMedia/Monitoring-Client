@@ -1,12 +1,12 @@
 """
 ServerMetry Agent self-updater.
 
-Resolves the latest released version (preferring the GitHub Releases API,
-falling back to parsing AGENT_VERSION out of constants.py on `main`), stages
-every file from the matching version tag in a temp directory, validates all
-Python files with ast.parse, and only swaps the staged files into place if
-everything fetched and validated cleanly. The previous tree is backed up
-first and restored automatically if the swap fails.
+Resolves the latest available version from both the GitHub Releases API and
+AGENT_VERSION on `main` (whichever is higher), stages every file from the
+matching version tag in a temp directory, validates all Python files with
+ast.parse, and only swaps the staged files into place if everything fetched
+and validated cleanly. The previous tree is backed up first and restored
+automatically if the swap fails.
 """
 
 import ast
@@ -189,11 +189,15 @@ def _write_last_check_ts(remote_version=None):
 
 def _resolve_latest_version(log_fn=None):
     """
-    Determine the latest available version string, preferring the GitHub
-    Releases API (`tag_name`, e.g. "v1.4.1") and falling back to parsing
-    AGENT_VERSION out of constants.py on `main` if the API call fails.
+    Determine the latest available version by checking BOTH the GitHub
+    Releases API (`tag_name`, e.g. "v1.4.1") and AGENT_VERSION in
+    constants.py on `main`, then returning the higher semver. If one
+    source fails, the other is used alone.
     Returns the version string (without leading "v") or None.
     """
+    release_version = None
+    main_version = None
+
     if log_fn:
         log_fn("Fetching latest release info from {}".format(GITHUB_RELEASES_LATEST_URL))
 
@@ -206,42 +210,84 @@ def _resolve_latest_version(log_fn=None):
             tag = ""
         version = tag[1:] if tag.startswith("v") else tag
         if version and re.match(r"^\d+(\.\d+)*$", version):
-            return version
-        if log_fn:
-            log_fn("Auto-update: releases API returned no usable tag_name, falling back to main")
+            release_version = version
+        elif log_fn:
+            log_fn("Auto-update: releases API returned no usable tag_name")
     elif log_fn:
-        log_fn("Auto-update: releases API unavailable (HTTP {}), falling back to main".format(status))
+        log_fn("Auto-update: releases API unavailable (HTTP {})".format(status))
 
     version_url = "{}?t={}".format(GITHUB_MAIN_VERSION_URL, int(time.time()))
     if log_fn:
         log_fn("Auto-update: fetching version from {}".format(version_url))
     ok, version_content = _fetch(version_url)
-    if not ok or not version_content:
-        return None
-    return _parse_version(version_content)
+    if ok and version_content:
+        main_version = _parse_version(version_content)
+    elif log_fn:
+        log_fn("Auto-update: could not fetch version from main")
+
+    if release_version and main_version:
+        if _version_tuple(main_version) > _version_tuple(release_version):
+            if log_fn:
+                log_fn(
+                    "Auto-update: main (v{}) is newer than release (v{})".format(
+                        main_version, release_version
+                    )
+                )
+            return main_version
+        if log_fn:
+            log_fn(
+                "Auto-update: using release v{} (main is v{})".format(
+                    release_version, main_version
+                )
+            )
+        return release_version
+
+    return release_version or main_version
 
 
 def update_status(auto_updates_enabled=None):
-    """Print auto-update schedule status. No network requests."""
+    """Print auto-update schedule status. No network requests.
+
+    "Latest" is the version remembered from the last successful check
+    (``.update_check_ts``), not a live GitHub lookup — use ``--check-update``
+    for that. When the check is overdue we never claim "up to date" from stale
+    cache, which previously contradicted a live ``--check-update``.
+    """
     import datetime
 
     last_ts = _read_last_check_ts()
     last_remote = _read_last_remote_version()
     now = time.time()
+    overdue = last_ts > 0.0 and (now - last_ts) >= UPDATE_CHECK_INTERVAL
 
     print("Auto-Update Status")
     print("  Version         : v{}".format(AGENT_VERSION))
-    if last_remote and last_remote != AGENT_VERSION:
-        print("  Latest          : v{} (update available)".format(last_remote))
-    elif last_remote:
-        print("  Latest          : v{} (up to date)".format(last_remote))
-    else:
+    if not last_remote:
         print("  Latest          : unknown (not yet checked)")
+    elif _version_tuple(last_remote) > _version_tuple(AGENT_VERSION):
+        print("  Latest          : v{} (update available)".format(last_remote))
+    elif overdue:
+        # Cache says equal/older but the check itself is stale — do not claim
+        # "up to date" (live GitHub may already be newer; see --check-update).
+        print(
+            "  Latest          : v{} (from last check; stale — run --check-update)".format(
+                last_remote
+            )
+        )
+    else:
+        print("  Latest          : v{} (up to date)".format(last_remote))
 
     if auto_updates_enabled is not None:
         print("  Auto-updates    : {}".format("enabled" if auto_updates_enabled else "disabled"))
 
-    if last_ts == 0.0:
+    if auto_updates_enabled is False:
+        if last_ts == 0.0:
+            print("  Last check      : never")
+        else:
+            last_dt = datetime.datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M:%S")
+            print("  Last check      : {}".format(last_dt))
+        print("  Next check      : will not run until auto-updates are enabled")
+    elif last_ts == 0.0:
         print("  Last check      : never")
         print("  Next check      : on next metric report")
     else:
@@ -426,6 +472,9 @@ def check_and_update(log_debug_fn=None, force=False):
         remote_version = _resolve_latest_version(log_fn=log_debug_fn)
         if not remote_version:
             log_write("WARNING", "Auto-update: could not resolve latest version – skipping")
+            # Still advance the interval so a failing resolve cannot hammer
+            # GitHub on every metric report (unauthenticated rate limit: 60/h).
+            _write_last_check_ts()
             return "skipped"
 
         if log_debug_fn:
@@ -447,19 +496,17 @@ def check_and_update(log_debug_fn=None, force=False):
 
         result = _stage_and_apply_update(remote_version, log_debug_fn=log_debug_fn)
 
+        # Always record that we attempted this remote version (success or not).
+        # That keeps --update-status honest ("update available") and enforces the
+        # 1h interval so failed applies/network blips do not retry every minute.
+        _write_last_check_ts(remote_version=remote_version)
+
         if result == "updated":
-            _write_last_check_ts(remote_version=remote_version)
             try:
                 from services.path_migration import migrate_install_paths
                 migrate_install_paths()
             except Exception as e:
                 log_write("WARNING", "Auto-update: path migration skipped: {}".format(e))
-        else:
-            # Fetch/validate/apply failures are typically transient (network,
-            # not-yet-propagated tag) — don't write the timestamp so the next
-            # scheduled run retries. Permission errors are the one exception
-            # already handled with their own log message above.
-            pass
 
         return result
     finally:
