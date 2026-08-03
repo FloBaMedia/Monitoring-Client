@@ -491,12 +491,16 @@ def main():
     if not ok:
         log_write("ERROR", "Failed to post metrics: {}".format(post_err))
 
-    # Bootstrap when no local cache yet (both sides may be None/null), or when timestamps differ.
-    if ok and not no_apply_config and (stored_changed_at is None or config_changed_at != stored_changed_at):
+    # Bootstrap only when we have no cached config yet (empty remote_config),
+    # or when the server timestamp differs from what we last stored. Do NOT key
+    # solely on stored_changed_at is None — a successful fetch can persist a
+    # null configChangedAt (older APIs) and would otherwise refetch forever.
+    needs_config_fetch = (not remote_config) or (config_changed_at != stored_changed_at)
+    if ok and not no_apply_config and needs_config_fetch:
         from client.api import get_config
         from services.config_applier import apply_config
 
-        if stored_changed_at is None:
+        if not remote_config:
             log_debug("No cached config — fetching for the first time", debug_flag=DEBUG)
         else:
             log_debug("Config changed on server — re-fetching", debug_flag=DEBUG)
