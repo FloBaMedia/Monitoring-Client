@@ -335,16 +335,18 @@ def main():
         sys.exit(0)
 
     if config_status:
-        stored_changed_at, remote_config, stored_services, _ = _load_config_state()
+        stored_changed_at, remote_config, stored_services, config_state_loaded = _load_config_state()
         print("ServerMetry Agent — Config Status")
         print("")
         print("Local config ({})".format(conf_path or "env vars"))
         print("  API URL:      {}".format(values.get("api_url", DEFAULT_API_URL)))
         print("  Server ID:    {}".format(values.get("server_id", "(not set)")))
         print("")
-        if remote_config:
+        if config_state_loaded:
+            # Match runtime gate: missing enableAutoUpdates => enabled (opt-out).
+            auto_updates_on = remote_config.get("enableAutoUpdates") is not False
             print("Server config (last fetched: {})".format(stored_changed_at or "unknown"))
-            print("  Auto-updates: {}".format("enabled" if remote_config.get("enableAutoUpdates") else "disabled"))
+            print("  Auto-updates: {}".format("enabled" if auto_updates_on else "disabled"))
             print("  Report every: {}s".format(remote_config.get("reportIntervalSeconds", 60)))
             print("  Timezone:     {}".format(remote_config.get("timezone") or "(not set)"))
             print("  Locale:       {}".format(remote_config.get("locale") or "(not set)"))
@@ -360,8 +362,12 @@ def main():
         except ImportError:
             print("ERROR: services/updater.py is missing. Run with --update to bootstrap.")
             sys.exit(1)
-        _, cached_config, _, _ = _load_config_state()
-        auto_updates = cached_config.get("enableAutoUpdates") if cached_config else None
+        _, cached_config, _, config_state_loaded = _load_config_state()
+        if config_state_loaded:
+            # Match runtime: missing key => enabled; only explicit False disables.
+            auto_updates = cached_config.get("enableAutoUpdates") is not False
+        else:
+            auto_updates = None
         update_status(auto_updates_enabled=auto_updates)
         sys.exit(0)
 
