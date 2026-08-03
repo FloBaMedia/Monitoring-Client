@@ -29,7 +29,7 @@ $InstallDir  = "C:\ProgramData\ServerMetry"
 $AgentPath   = "$InstallDir\agent.py"
 $ConfPath    = "$InstallDir\agent.conf"
 $LogPath     = "$InstallDir\agent.log"
-$GithubBase  = "https://raw.githubusercontent.com/FloBaMedia/Monitoring-Client/main/agent"
+$GithubBase  = "https://raw.githubusercontent.com/FloBaMedia/servermetry-client/main/agent"
 $TaskName    = "ServerMetryAgent"
 
 # All module files that must be present alongside agent.py

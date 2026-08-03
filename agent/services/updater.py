@@ -25,7 +25,7 @@ from models.paths import resolve_install_dir
 from utils.lock import FileLock, atomic_write
 from utils.logging import log_write
 
-GITHUB_REPO = "FloBaMedia/Monitoring-Client"
+GITHUB_REPO = "FloBaMedia/servermetry-client"
 GITHUB_RELEASES_LATEST_URL = "https://api.github.com/repos/{}/releases/latest".format(GITHUB_REPO)
 GITHUB_RAW_ROOT = "https://raw.githubusercontent.com/{}".format(GITHUB_REPO)
 GITHUB_MAIN_AGENT_DIR = GITHUB_RAW_ROOT + "/main/agent"
