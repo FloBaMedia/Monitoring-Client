@@ -332,35 +332,45 @@ def _read_raid_arrays():
             parts = line.split()
             name = parts[0]
             # Format: md0 : active raid1 sda1[0] sdb1[1]
+            # Failed members appear as sdb1[1](F) on this summary line.
             active = "active" in parts
             level = ""
             devices = []
+            failed = []
             for p in parts[2:]:
                 if p.startswith("raid"):
                     level = p
                 elif "[" in p:
                     devices.append(p.split("[")[0])
+                    if "(F)" in p:
+                        failed.append(p.replace("(F)", "").split("[")[0])
             current = {
                 "name": name,
                 "level": level,
                 "state": "active" if active else "inactive",
                 "devices": devices,
-                "degraded": False,
-                "failedDevices": [],
+                "degraded": bool(failed),
+                "failedDevices": failed,
             }
+            if failed:
+                current["state"] = "degraded"
         elif current:
             m = re.search(r"\[([U_]+)\]", line)
             if m and "_" in m.group(1):
                 current["degraded"] = True
                 current["state"] = "degraded"
+            # recovery/resync/reshape alone is not degraded (healthy check rebuilds
+            # also show these keywords). Reflect sync progress in state only.
             if "recovery" in line or "resync" in line or "reshape" in line:
-                current["degraded"] = True
-                if current["state"] == "active":
+                if current["degraded"] or current["state"] == "active":
                     current["state"] = "recovering"
             for tok in line.split():
                 if "(F)" in tok:
-                    current["failedDevices"].append(tok.replace("(F)", "").split("[")[0])
+                    name = tok.replace("(F)", "").split("[")[0]
+                    if name and name not in current["failedDevices"]:
+                        current["failedDevices"].append(name)
                     current["degraded"] = True
+                    current["state"] = "degraded"
     if current:
         arrays.append(current)
     return arrays
