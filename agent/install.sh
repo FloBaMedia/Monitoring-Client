@@ -186,10 +186,22 @@ _ensure_crontab() {
     fi
     info "crontab is now available."
 
-    # Start the cron daemon when systemd is present (package install may not auto-start it).
+    # Start the cron daemon (package install may not auto-start it).
     if command -v systemctl &>/dev/null; then
         systemctl enable --now cron 2>/dev/null \
             || systemctl enable --now crond 2>/dev/null \
+            || true
+    elif command -v rc-service &>/dev/null; then
+        # Alpine / OpenRC – systemctl is usually absent
+        rc-update add crond default 2>/dev/null \
+            || rc-update add cron default 2>/dev/null \
+            || true
+        rc-service crond start 2>/dev/null \
+            || rc-service cron start 2>/dev/null \
+            || true
+    elif command -v service &>/dev/null; then
+        service cron start 2>/dev/null \
+            || service crond start 2>/dev/null \
             || true
     fi
 }
