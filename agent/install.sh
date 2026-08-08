@@ -158,7 +158,60 @@ fi
 chmod 600 "$CONF_PATH"
 info "Config written to $CONF_PATH (mode 600)"
 
-# ── 7. Crontab entry (idempotent) ─────────────────────────────────────────────
+# ── 7. Ensure crontab is available ────────────────────────────────────────────
+# Minimal Debian/cloud images often ship without the `cron` package.
+_ensure_crontab() {
+    if command -v crontab &>/dev/null; then
+        return 0
+    fi
+
+    warn "crontab not found – installing cron package ..."
+    if command -v apt-get &>/dev/null; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cron
+    elif command -v dnf &>/dev/null; then
+        dnf install -y -q cronie
+    elif command -v yum &>/dev/null; then
+        yum install -y -q cronie
+    elif command -v zypper &>/dev/null; then
+        zypper --non-interactive install -y cron
+    elif command -v apk &>/dev/null; then
+        apk add --no-cache cronie 2>/dev/null || apk add --no-cache dcron
+    else
+        die "crontab not found and no supported package manager. Install cron (Debian/Ubuntu: apt install cron) and re-run the installer."
+    fi
+
+    if ! command -v crontab &>/dev/null; then
+        die "crontab still not available after package install."
+    fi
+    info "crontab is now available."
+
+    # Start the cron daemon (package install may not auto-start it).
+    if command -v systemctl &>/dev/null; then
+        systemctl enable --now cron 2>/dev/null \
+            || systemctl enable --now crond 2>/dev/null \
+            || true
+    elif command -v rc-service &>/dev/null; then
+        # Alpine / OpenRC – systemctl is usually absent (cronie→crond, dcron→dcron)
+        rc-update add crond default 2>/dev/null \
+            || rc-update add dcron default 2>/dev/null \
+            || rc-update add cron default 2>/dev/null \
+            || true
+        rc-service crond start 2>/dev/null \
+            || rc-service dcron start 2>/dev/null \
+            || rc-service cron start 2>/dev/null \
+            || true
+    elif command -v service &>/dev/null; then
+        service cron start 2>/dev/null \
+            || service crond start 2>/dev/null \
+            || service dcron start 2>/dev/null \
+            || true
+    fi
+}
+
+_ensure_crontab
+
+# ── 8. Crontab entry (idempotent) ─────────────────────────────────────────────
 CRON_LINE="* * * * * $PYTHON $AGENT_PATH"
 
 if crontab -l 2>/dev/null | grep -qF "$CRON_MARKER"; then
@@ -169,7 +222,7 @@ else
     info "Added crontab entry: $CRON_LINE"
 fi
 
-# ── 8. First test run ─────────────────────────────────────────────────────────
+# ── 9. First test run ─────────────────────────────────────────────────────────
 echo ""
 info "Verifying agent (collecting metrics, no HTTP request) ..."
 echo "─────────────────────────────────────────────"

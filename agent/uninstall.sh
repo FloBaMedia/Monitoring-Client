@@ -41,7 +41,9 @@ confirm "Continue with uninstallation?" || { echo "Aborted."; exit 0; }
 echo ""
 
 # ── 1. Remove crontab entry ───────────────────────────────────────────────────
-if crontab -l 2>/dev/null | grep -qF "$CRON_MARKER"; then
+if ! command -v crontab &>/dev/null; then
+    info "crontab not installed – skipping cron cleanup."
+elif crontab -l 2>/dev/null | grep -qF "$CRON_MARKER"; then
     crontab -l 2>/dev/null | grep -vF "$CRON_MARKER" | crontab -
     info "Crontab entry removed."
 else
