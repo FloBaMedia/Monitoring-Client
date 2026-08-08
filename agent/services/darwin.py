@@ -160,9 +160,35 @@ def _read_disk_usages():
     return result
 
 
+def _read_iface_addresses():
+    """Best-effort IPv4/IPv6 map via `ifconfig -a`."""
+    mapping = {}
+    raw = _cmd(["ifconfig", "-a"], timeout=5)
+    current = None
+    for line in raw.splitlines():
+        if line and not line[0].isspace():
+            current = line.split(":")[0].strip()
+            if current.startswith("lo"):
+                current = None
+            continue
+        if not current:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("inet "):
+            addr = stripped.split()[1]
+            mapping.setdefault(current, []).append({"address": addr, "family": "inet"})
+        elif stripped.startswith("inet6 "):
+            addr = stripped.split()[1].split("%")[0]
+            if addr.lower().startswith("fe80:"):
+                continue
+            mapping.setdefault(current, []).append({"address": addr, "family": "inet6"})
+    return mapping
+
+
 def _read_network_interfaces():
     result = []
     seen = set()
+    addr_map = _read_iface_addresses()
     raw = _cmd(["netstat", "-ib"])
     for line in raw.splitlines()[1:]:
         parts = line.split()
@@ -181,10 +207,54 @@ def _read_network_interfaces():
                 "rxPackets": int(parts[4]),
                 "txBytes": int(parts[9]),
                 "txPackets": int(parts[7]),
+                "addresses": addr_map.get(name, []),
             })
         except (ValueError, IndexError):
             continue
     return result
+
+
+def _read_disk_health():
+    """macOS: SMART via `diskutil`/smartctl when present; no software RAID by default."""
+    disks = []
+    scan = _cmd(["smartctl", "--scan"], timeout=8)
+    for line in scan.splitlines():
+        parts = line.split("#")[0].split()
+        if not parts:
+            continue
+        device = parts[0]
+        health = "UNKNOWN"
+        model = ""
+        temperature = None
+        out = _cmd(["smartctl", "-H", "-A", "-i", device], timeout=10)
+        for hl in out.splitlines():
+            if "SMART overall-health" in hl or "SMART Health Status" in hl:
+                if "PASSED" in hl or "OK" in hl:
+                    health = "PASSED"
+                elif "FAILED" in hl or "FAILING" in hl:
+                    health = "FAILED"
+            if "Device Model:" in hl or "Model Number:" in hl:
+                model = hl.split(":", 1)[-1].strip()
+            if "Temperature_Celsius" in hl:
+                toks = hl.split()
+                for t in reversed(toks):
+                    if t.isdigit():
+                        temperature = int(t)
+                        break
+        disks.append({
+            "name": device,
+            "model": model or None,
+            "health": health,
+            "temperatureC": temperature,
+        })
+        if len(disks) >= 32:
+            break
+    return {
+        "raids": [],
+        "disks": disks,
+        "raidDegradedCount": 0,
+        "diskUnhealthyCount": sum(1 for d in disks if d.get("health") == "FAILED"),
+    }
 
 
 def _read_io():
@@ -309,6 +379,7 @@ def collect_darwin_metrics():
         "swapUsedMb": swap_used,
         "diskUsages": disks,
         "networkInterfaces": networks,
+        "diskHealth": _read_disk_health(),
         "processCount": proc_count,
         "topProcesses": top_processes,
         "openFiles": open_files,
