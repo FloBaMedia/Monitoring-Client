@@ -192,16 +192,19 @@ _ensure_crontab() {
             || systemctl enable --now crond 2>/dev/null \
             || true
     elif command -v rc-service &>/dev/null; then
-        # Alpine / OpenRC – systemctl is usually absent
+        # Alpine / OpenRC – systemctl is usually absent (cronie→crond, dcron→dcron)
         rc-update add crond default 2>/dev/null \
+            || rc-update add dcron default 2>/dev/null \
             || rc-update add cron default 2>/dev/null \
             || true
         rc-service crond start 2>/dev/null \
+            || rc-service dcron start 2>/dev/null \
             || rc-service cron start 2>/dev/null \
             || true
     elif command -v service &>/dev/null; then
         service cron start 2>/dev/null \
             || service crond start 2>/dev/null \
+            || service dcron start 2>/dev/null \
             || true
     fi
 }
