@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Caches, tests fixtures, and local state files"
+paths = [
+  '''(^|/)(\.git|__pycache__|\.pytest_cache|\.mypy_cache)(/|$)''',
+  '''(^|/)agent/\.cpu_snap$''',
+  '''(^|/)agent/\.apt_updates_cache\.json$''',
+]

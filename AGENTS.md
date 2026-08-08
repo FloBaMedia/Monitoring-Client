@@ -30,6 +30,19 @@ git checkout -b fix/mein-fix
 - Nach dem Merge nach `main` (durch Mensch/Review) deployt Coolify automatisch, falls für dieses Repo zutreffend.
 - Jede Code-Änderung am Agent (`agent/`) muss `AGENT_VERSION` in `agent/models/constants.py` im selben Commit erhöhen — siehe [Client Version Bump](../Monitoring-API/AGENTS.md#client-version-bump). Ohne Bump erkennt der Auto-Updater die neue Version nicht und ausgerollte Agents bleiben auf dem alten Stand.
 
+## CI & Security (GitHub Actions)
+
+Der Client hat **keinen** Coolify-Deploy; Sicherheit läuft über GitHub Actions auf jedem PR/`main`-Push und wöchentlich:
+
+| Workflow | Jobs (Hard Gate) | Soft / report |
+|----------|------------------|---------------|
+| `CI` | Pytest, ShellCheck (error), Bandit (medium+) | — |
+| `Security` | Gitleaks, Trivy FS CRITICAL | Semgrep (p/default + p/python + OWASP) |
+
+Zusätzlich: Dependabot für `github-actions` (wöchentlich).
+
+**Agent-Hinweis:** Änderungen an `.github/workflows/security.yml` / `.gitleaks.toml` / `.bandit` mit den Geschwister-Repos (API/Frontend) abstimmen — gleiche Action-Pins und Gitleaks-Version wie iboys/ServerMetry-API.
+
 ## GitHub Release (nach Merge nach `main`)
 
 Der Agent-Auto-Updater und das Dashboard („Update verfügbar“) nutzen die **GitHub Releases API** (`/releases/latest`) und fallen sonst auf `AGENT_VERSION` in `main` zurück. Deshalb nach jedem Version-Bump **ein Release anlegen**, sobald der PR auf `main` gemerged ist.
