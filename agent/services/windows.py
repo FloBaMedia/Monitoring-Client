@@ -125,19 +125,34 @@ Get-CimInstance Win32_LogicalDisk | Where-Object {
 }
 $out.diskUsages = $disks
 
-# Network
-$nets = @()
-$stats = Get-NetAdapterStatistics -ErrorAction SilentlyContinue | Where-Object {
-  $_.ReceivedBytes -gt 0 -or $_.SentBytes -gt 0
+# Network (+ best-effort interface addresses)
+$addrByIfIndex = @{}
+Get-NetIPAddress -AddressFamily IPv4,IPv6 -ErrorAction SilentlyContinue | Where-Object {
+  $_.IPAddress -and $_.IPAddress -notlike '127.*' -and $_.IPAddress -ne '::1' -and $_.IPAddress -notlike 'fe80*'
+} | ForEach-Object {
+  $key = [string]$_.InterfaceIndex
+  if (-not $addrByIfIndex.ContainsKey($key)) { $addrByIfIndex[$key] = @() }
+  $fam = if ($_.AddressFamily -eq 'IPv6') { 'inet6' } else { 'inet' }
+  $addrByIfIndex[$key] += @{ address = [string]$_.IPAddress; family = $fam }
 }
+$nets = @()
+$adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' }
+$stats = Get-NetAdapterStatistics -ErrorAction SilentlyContinue
 if ($stats) {
   $stats | ForEach-Object {
+    $ifIndex = $null
+    $name = [string]$_.Name
+    $match = $adapters | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+    if ($match) { $ifIndex = [string]$match.ifIndex }
+    $addrs = @()
+    if ($ifIndex -and $addrByIfIndex.ContainsKey($ifIndex)) { $addrs = $addrByIfIndex[$ifIndex] }
     $nets += @{
-      name = [string]$_.Name
+      name = $name
       rxBytes = [long]$_.ReceivedBytes
       txBytes = [long]$_.SentBytes
       rxPackets = [long]$_.ReceivedUnicastPackets
       txPackets = [long]$_.SentUnicastPackets
+      addresses = $addrs
     }
   }
 }
@@ -218,10 +233,54 @@ def _network_fallback():
             parts = line.split()
             if len(parts) == 3 and parts[0].lower() == "bytes":
                 return [{"name": "total", "rxBytes": int(parts[1]),
-                         "txBytes": int(parts[2]), "rxPackets": 0, "txPackets": 0}]
+                         "txBytes": int(parts[2]), "rxPackets": 0, "txPackets": 0,
+                         "addresses": []}]
     except Exception:
         pass
     return []
+
+
+def _read_disk_health():
+    """Windows: SMART via smartctl when present; Storage Spaces / RAID not parsed yet."""
+    disks = []
+    scan = _ps("smartctl --scan", timeout=8)
+    for line in scan.splitlines():
+        parts = line.split("#")[0].split()
+        if not parts:
+            continue
+        device = parts[0]
+        health = "UNKNOWN"
+        model = ""
+        temperature = None
+        out = _ps("smartctl -H -A -i {}".format(device), timeout=10)
+        for hl in out.splitlines():
+            if "SMART overall-health" in hl or "SMART Health Status" in hl:
+                if "PASSED" in hl or "OK" in hl:
+                    health = "PASSED"
+                elif "FAILED" in hl or "FAILING" in hl:
+                    health = "FAILED"
+            if "Device Model:" in hl or "Model Number:" in hl:
+                model = hl.split(":", 1)[-1].strip()
+            if "Temperature_Celsius" in hl:
+                toks = hl.split()
+                for t in reversed(toks):
+                    if t.isdigit():
+                        temperature = int(t)
+                        break
+        disks.append({
+            "name": device,
+            "model": model or None,
+            "health": health,
+            "temperatureC": temperature,
+        })
+        if len(disks) >= 32:
+            break
+    return {
+        "raids": [],
+        "disks": disks,
+        "raidDegradedCount": 0,
+        "diskUnhealthyCount": sum(1 for d in disks if d.get("health") == "FAILED"),
+    }
 
 
 def _filter_disks(disks):
@@ -300,12 +359,25 @@ def collect_windows_metrics():
                 name = (row.get("name") or "").strip()
                 if not name:
                     continue
+                addrs = row.get("addresses") or []
+                if isinstance(addrs, dict):
+                    addrs = [addrs]
+                clean_addrs = []
+                for a in addrs:
+                    try:
+                        address = (a.get("address") or "").strip()
+                        family = (a.get("family") or "inet").strip()
+                        if address:
+                            clean_addrs.append({"address": address, "family": family})
+                    except (AttributeError, TypeError):
+                        continue
                 normalized.append({
                     "name": name,
                     "rxBytes": int(row.get("rxBytes") or 0),
                     "txBytes": int(row.get("txBytes") or 0),
                     "rxPackets": int(row.get("rxPackets") or 0),
                     "txPackets": int(row.get("txPackets") or 0),
+                    "addresses": clean_addrs,
                 })
             except (ValueError, TypeError):
                 continue
@@ -332,6 +404,7 @@ def collect_windows_metrics():
         "swapUsedMb": int(base.get("swapUsedMb") or 0),
         "diskUsages": _filter_disks(base.get("diskUsages")),
         "networkInterfaces": networks,
+        "diskHealth": _read_disk_health(),
         "processCount": int(base.get("processCount") or 0),
         "topProcesses": top_processes,
         "openFiles": int(base.get("openFiles") or 0),
