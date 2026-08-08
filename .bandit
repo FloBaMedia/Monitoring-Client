@@ -1,0 +1,9 @@
+# Bandit config for the ServerMetry agent (Python 3 only).
+# B322 (input) is a Python 2 false positive.
+# B310 (urllib.urlopen) is expected: all call sites use https + ssl.create_default_context().
+# B602 (shell=True): agent uses argv lists with shell=False; Bandit still flags `shell=shell`.
+skips: ['B322', 'B310', 'B602']
+
+exclude_dirs:
+  - tests
+  - __pycache__
