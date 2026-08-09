@@ -99,7 +99,8 @@ def _fetch_with_status(url, timeout=UPDATE_FETCH_TIMEOUT):
 
 def _fetch(url, timeout=UPDATE_FETCH_TIMEOUT):
     status, content = _fetch_with_status(url, timeout=timeout)
-    if status == 200 and content:
+    # HTTP 200 with an empty body is success (e.g. empty __init__.py package markers).
+    if status == 200:
         return True, content
     if status is not None:
         log_write("WARNING", "Auto-update: HTTP {} fetching {}".format(status, url))
@@ -110,10 +111,13 @@ def _fetch_file(rel_path, version, log_fn=None):
     """
     Fetch a single agent file for the given version tag, falling back to
     `main` if the tag doesn't have it (e.g. 404). Returns (ok, content, url).
+
+    Empty files (HTTP 200, 0-byte body) are valid — package ``__init__.py``
+    markers are often empty. Treat only non-200 as failure.
     """
     tag_url = "{}/v{}/agent/{}".format(GITHUB_RAW_ROOT, version, rel_path)
     status, content = _fetch_with_status(tag_url)
-    if status == 200 and content:
+    if status == 200:
         return True, content, tag_url
 
     if log_fn:
@@ -125,7 +129,7 @@ def _fetch_file(rel_path, version, log_fn=None):
 
     main_url = "{}/{}".format(GITHUB_MAIN_AGENT_DIR, rel_path)
     status2, content2 = _fetch_with_status(main_url)
-    if status2 == 200 and content2:
+    if status2 == 200:
         return True, content2, main_url
 
     log_write(
