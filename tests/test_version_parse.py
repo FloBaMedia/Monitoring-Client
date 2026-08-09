@@ -21,6 +21,8 @@ if _AGENT_DIR not in sys.path:
 from models.constants import AGENT_VERSION  # noqa: E402
 from services.updater import (  # noqa: E402
     UPDATE_CHECK_INTERVAL,
+    _fetch,
+    _fetch_file,
     _parse_version,
     _resolve_latest_version,
     _version_tuple,
@@ -147,6 +149,33 @@ class TestUpdateStatus(unittest.TestCase):
             text = out.getvalue()
         self.assertIn("(up to date)", text)
         self.assertNotIn("stale", text)
+
+
+class TestFetchEmptyFiles(unittest.TestCase):
+    def test_fetch_accepts_http_200_empty_body(self):
+        with mock.patch("services.updater._fetch_with_status", return_value=(200, "")):
+            ok, content = _fetch("https://example.invalid/empty")
+        self.assertTrue(ok)
+        self.assertEqual(content, "")
+
+    def test_fetch_file_accepts_empty_init_from_tag(self):
+        with mock.patch("services.updater._fetch_with_status", return_value=(200, "")):
+            ok, content, url = _fetch_file("client/__init__.py", "1.4.7")
+        self.assertTrue(ok)
+        self.assertEqual(content, "")
+        self.assertIn("v1.4.7", url)
+
+    def test_fetch_file_falls_back_to_main_empty(self):
+        def fake_status(url, timeout=None):
+            if "/v1.4.7/" in url:
+                return 404, ""
+            return 200, ""
+
+        with mock.patch("services.updater._fetch_with_status", side_effect=fake_status):
+            ok, content, url = _fetch_file("client/__init__.py", "1.4.7")
+        self.assertTrue(ok)
+        self.assertEqual(content, "")
+        self.assertIn("/main/", url)
 
 
 class TestCheckAndUpdateBackoff(unittest.TestCase):
